@@ -18,6 +18,14 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root():
+    return {"message": "Backend Yorbis API", "status": "running"}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
 app.include_router(example_router, prefix="/api/v1")
 app.include_router(auth.router)
 app.include_router(pagoscpp_router)

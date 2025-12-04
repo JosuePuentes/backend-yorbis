@@ -58,6 +58,19 @@ async def copy_collection_structure(client, source_db, target_db, collection_nam
     
     print(f"\n📋 Procesando colección: {collection_name}")
     
+    # 0. Crear la colección insertando un documento temporal (MongoDB solo crea colecciones con documentos)
+    try:
+        # Verificar si la colección ya existe
+        existing_collections = await target_db.list_collection_names()
+        if collection_name not in existing_collections:
+            # Insertar documento temporal para crear la colección
+            await target_collection.insert_one({"_temp": True, "_created_for_structure": True})
+            # Eliminar el documento temporal
+            await target_collection.delete_one({"_temp": True})
+            print(f"   ✓ Colección creada")
+    except Exception as e:
+        print(f"   ⚠ Error creando colección: {e}")
+    
     # 1. Obtener y copiar índices
     try:
         indexes = await source_collection.list_indexes().to_list(length=None)
