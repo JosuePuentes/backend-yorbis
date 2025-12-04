@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+motor
+python-dotenv
+boto3
+pydantic
+pytz
+certifi
+passlib
+python-jose
