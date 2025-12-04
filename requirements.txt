@@ -7,4 +7,5 @@ pydantic
 pytz
 certifi
 passlib
+bcrypt
 python-jose
