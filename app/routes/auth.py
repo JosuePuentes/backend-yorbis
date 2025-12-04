@@ -106,16 +106,29 @@ async def obtener_usuarios(usuario_actual: dict = Depends(get_current_user)):
 
 @router.post("/auth/login")
 async def login_user(data: LoginInput):
-    usuario, token = await login_y_token(data.correo, data.contraseña, return_user=True)
-    if not token or not usuario:
-        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
-    # El usuario debe ser un dict con el campo 'farmacias'
-    usuario["_id"] = str(usuario["_id"])
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "usuario": usuario
-    }
+    try:
+        result = await login_y_token(data.correo, data.contraseña, return_user=True)
+        if result is None:
+            raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+        
+        usuario, token = result
+        if not token or not usuario:
+            raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+        
+        # El usuario debe ser un dict con el campo 'farmacias'
+        usuario["_id"] = str(usuario["_id"])
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "usuario": usuario
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error en login: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 @router.get("/cuadres")
 async def obtener_cuadres(
