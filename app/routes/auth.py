@@ -107,16 +107,29 @@ async def obtener_usuarios(usuario_actual: dict = Depends(get_current_user)):
 @router.post("/auth/login")
 async def login_user(data: LoginInput):
     try:
-        result = await login_y_token(data.correo, data.contraseña, return_user=True)
+        print(f"[LOGIN] Intento de login - Correo: {data.correo}")
+        
+        # Limpiar datos de entrada
+        correo = data.correo.strip().lower() if data.correo else ""
+        contraseña = data.contraseña.strip() if data.contraseña else ""
+        
+        if not correo or not contraseña:
+            print(f"[LOGIN] Correo o contraseña vacíos")
+            raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+        
+        result = await login_y_token(correo, contraseña, return_user=True)
         if result is None:
+            print(f"[LOGIN] login_y_token retornó None")
             raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
         
         usuario, token = result
         if not token or not usuario:
+            print(f"[LOGIN] Token o usuario faltante")
             raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
         
         # El usuario debe ser un dict con el campo 'farmacias'
         usuario["_id"] = str(usuario["_id"])
+        print(f"[LOGIN] Login exitoso para: {correo}")
         return {
             "access_token": token,
             "token_type": "bearer",
@@ -125,7 +138,7 @@ async def login_user(data: LoginInput):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error en login: {str(e)}")
+        print(f"[LOGIN] Error en login: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
