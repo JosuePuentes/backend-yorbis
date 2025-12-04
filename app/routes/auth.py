@@ -104,6 +104,36 @@ async def obtener_usuarios(usuario_actual: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/auth/me")
+async def get_current_user_info(usuario_actual: dict = Depends(get_current_user)):
+    """
+    Endpoint para obtener la información del usuario actual autenticado.
+    """
+    try:
+        # Remover la contraseña por seguridad
+        usuario_info = usuario_actual.copy()
+        if "contraseña" in usuario_info:
+            del usuario_info["contraseña"]
+        
+        return usuario_info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/usuarios/me")
+async def get_my_user_info(usuario_actual: dict = Depends(get_current_user)):
+    """
+    Endpoint alternativo para obtener la información del usuario actual.
+    """
+    try:
+        # Remover la contraseña por seguridad
+        usuario_info = usuario_actual.copy()
+        if "contraseña" in usuario_info:
+            del usuario_info["contraseña"]
+        
+        return usuario_info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/auth/login")
 async def login_user(data: LoginInput):
     try:
@@ -129,11 +159,23 @@ async def login_user(data: LoginInput):
         
         # El usuario debe ser un dict con el campo 'farmacias'
         usuario["_id"] = str(usuario["_id"])
+        
+        # Asegurar que los permisos estén incluidos
+        if "permisos" not in usuario:
+            usuario["permisos"] = []
+        
+        # Remover la contraseña de la respuesta
+        usuario_respuesta = usuario.copy()
+        if "contraseña" in usuario_respuesta:
+            del usuario_respuesta["contraseña"]
+        
         print(f"[LOGIN] Login exitoso para: {correo}")
+        print(f"[LOGIN] Permisos del usuario: {len(usuario_respuesta.get('permisos', []))}")
+        
         return {
             "access_token": token,
             "token_type": "bearer",
-            "usuario": usuario
+            "usuario": usuario_respuesta
         }
     except HTTPException:
         raise
