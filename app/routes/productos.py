@@ -69,6 +69,48 @@ async def obtener_productos(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/productos/buscar-codigo")
+async def buscar_codigo_producto(
+    codigo: str = Query(..., description="Código del producto a buscar"),
+    sucursal: Optional[str] = Query(None, description="ID de la sucursal (farmacia)"),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Busca si un código existe en el inventario.
+    Retorna el producto si existe, o array vacío si no existe.
+    Requiere autenticación.
+    """
+    try:
+        print(f"🔍 [PRODUCTOS] Buscando código: '{codigo}' en sucursal: {sucursal}")
+        
+        inventarios_collection = get_collection("INVENTARIOS")
+        
+        # Construir filtro
+        filtro = {"codigo": codigo.strip().upper()}
+        
+        # Filtrar por sucursal si se especifica
+        if sucursal and sucursal.strip():
+            filtro["farmacia"] = sucursal.strip()
+        
+        # Buscar producto
+        producto = await inventarios_collection.find_one(filtro)
+        
+        if producto:
+            producto["_id"] = str(producto["_id"])
+            if "productoId" in producto and isinstance(producto["productoId"], ObjectId):
+                producto["productoId"] = str(producto["productoId"])
+            print(f"🔍 [PRODUCTOS] Código '{codigo}' encontrado")
+            return [producto]
+        else:
+            print(f"🔍 [PRODUCTOS] Código '{codigo}' no encontrado")
+            return []
+            
+    except Exception as e:
+        print(f"❌ [PRODUCTOS] Error buscando código: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/productos/{producto_id}")
 async def obtener_producto(producto_id: str, usuario_actual: dict = Depends(get_current_user)):
     """

@@ -338,7 +338,10 @@ async def crear_compra(compra_data: dict = Body(...), usuario_actual: dict = Dep
             raise HTTPException(status_code=400, detail="El campo 'proveedorId' es requerido")
         
         # Validar estructura de productos
-        for i, producto in enumerate(compra_data["productos"]):
+        productos = compra_data["productos"]
+        farmacia = compra_data["farmacia"]
+        
+        for i, producto in enumerate(productos):
             if not isinstance(producto, dict):
                 raise HTTPException(status_code=400, detail=f"El producto en la posición {i} debe ser un objeto")
             
@@ -353,6 +356,44 @@ async def crear_compra(compra_data: dict = Body(...), usuario_actual: dict = Dep
             
             if "precioTotal" not in producto:
                 raise HTTPException(status_code=400, detail=f"El producto en la posición {i} debe tener el campo 'precioTotal'")
+        
+        # VALIDACIÓN 1: Validar códigos duplicados dentro de la misma compra
+        codigos_vistos = set()
+        for i, producto in enumerate(productos):
+            codigo = producto.get("codigo")
+            if codigo:
+                codigo_normalizado = str(codigo).strip().upper()
+                if codigo_normalizado in codigos_vistos:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"El código '{codigo_normalizado}' está duplicado en la compra. Cada producto debe tener un código único."
+                    )
+                codigos_vistos.add(codigo_normalizado)
+        
+        # VALIDACIÓN 2: Validar que productos nuevos no tengan códigos que ya existen en inventario
+        inventarios_collection = get_collection("INVENTARIOS")
+        for i, producto in enumerate(productos):
+            es_nuevo = producto.get("es_nuevo", False)
+            codigo = producto.get("codigo")
+            
+            if es_nuevo and codigo:
+                codigo_normalizado = str(codigo).strip().upper()
+                
+                # Buscar si el código ya existe en el inventario de esta farmacia
+                filtro_codigo = {
+                    "codigo": codigo_normalizado,
+                    "farmacia": farmacia
+                }
+                producto_existente = await inventarios_collection.find_one(filtro_codigo)
+                
+                if producto_existente:
+                    nombre_existente = producto_existente.get("nombre", "Desconocido")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"El código '{codigo_normalizado}' ya existe en el inventario para el producto '{nombre_existente}'. Los productos nuevos no pueden usar códigos existentes."
+                    )
+        
+        print(f"✅ [COMPRAS] Validaciones de códigos pasadas correctamente")
         
         # Crear el documento de compra
         compra_dict = compra_data.copy()
