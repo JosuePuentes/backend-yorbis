@@ -9,6 +9,7 @@ from app.routes.pagoscpp import router as pagoscpp_router
 from app.routes.cuadres import router as cuadres
 from app.routes.proveedores import router as proveedores_router
 from app.routes.compras import router as compras_router
+from app.routes.productos import router as productos_router
 
 
 app = FastAPI(
@@ -87,3 +88,4 @@ app.include_router(metas.router, tags=["metas"])
 app.include_router(cuadres, prefix="/api/cuadres", tags=["cuadres"])
 app.include_router(proveedores_router, tags=["proveedores"])
 app.include_router(compras_router, tags=["compras"])
+app.include_router(productos_router, tags=["productos"])

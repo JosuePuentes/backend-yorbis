@@ -840,9 +840,20 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
     El {id} puede ser el ID de la farmacia o el ID de un inventario específico.
     Si es un ID de farmacia, retorna todos los items de esa farmacia.
     Si es un ID de inventario, retorna ese item específico.
+    Si el ID está vacío, retorna todos los inventarios.
     """
     try:
         collection = get_collection("INVENTARIOS")
+        
+        # Si el ID está vacío, retornar todos los inventarios
+        if not id or id.strip() == "":
+            print("🔍 [INVENTARIOS] ID vacío, retornando todos los inventarios")
+            inventarios = await collection.find({}).to_list(length=None)
+            for inv in inventarios:
+                inv["_id"] = str(inv["_id"])
+                if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
+                    inv["productoId"] = str(inv["productoId"])
+            return inventarios
         
         # Intentar primero como ObjectId (inventario específico)
         try:
@@ -850,6 +861,8 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
             inventario = await collection.find_one({"_id": object_id})
             if inventario:
                 inventario["_id"] = str(inventario["_id"])
+                if "productoId" in inventario and isinstance(inventario["productoId"], ObjectId):
+                    inventario["productoId"] = str(inventario["productoId"])
                 return [inventario]  # Retornar como lista para consistencia
         except (InvalidId, ValueError):
             # Si no es un ObjectId válido, tratar como ID de farmacia
