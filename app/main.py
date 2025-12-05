@@ -5,6 +5,7 @@ from app.api.v1.routes_example import router as example_router
 from app.routes import auth, metas
 from app.routes.pagoscpp import router as pagoscpp_router
 from app.routes.cuadres import router as cuadres
+from app.routes.proveedores import router as proveedores_router
 
 
 app = FastAPI(
@@ -47,3 +48,4 @@ app.include_router(auth.router)
 app.include_router(pagoscpp_router)
 app.include_router(metas.router, tags=["metas"])
 app.include_router(cuadres, prefix="/api/cuadres", tags=["cuadres"])
+app.include_router(proveedores_router, tags=["proveedores"])
