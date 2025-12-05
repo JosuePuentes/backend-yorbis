@@ -51,6 +51,20 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
         codigo = producto_data.get("codigo")
         producto_id = producto_data.get("productoId")
         
+        # Obtener precio_venta si existe, sino usar precio_unitario como fallback
+        precio_venta = producto_data.get("precio_venta")
+        if precio_venta is None:
+            precio_venta = producto_data.get("precioVenta")
+        if precio_venta is None:
+            # Si no hay precio_venta explícito, usar precio_unitario como referencia
+            precio_venta = precio_unitario
+        
+        # Convertir a float si es necesario
+        if precio_venta is not None:
+            precio_venta = float(precio_venta)
+        else:
+            precio_venta = precio_unitario
+        
         if not nombre:
             raise ValueError("El producto debe tener un nombre")
         
@@ -84,18 +98,28 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
                 costo_promedio = precio_unitario
             
             # Actualizar inventario
+            # Solo actualizar precio_venta si no existe o si viene en la compra
+            update_data = {
+                "cantidad": cantidad_nueva,
+                "costo": costo_promedio,
+                "fechaActualizacion": fecha_actual,
+                "usuarioActualizacion": usuario_correo
+            }
+            
+            # Si el producto de la compra tiene precio_venta, actualizarlo
+            # Si el inventario no tiene precio_venta, establecerlo
+            if precio_venta and precio_venta > 0:
+                if "precio_venta" not in inventario_existente or inventario_existente.get("precio_venta") == 0:
+                    update_data["precio_venta"] = precio_venta
+                # Opcional: también actualizar si viene explícitamente en la compra
+                # (descomentar si quieres que siempre se actualice)
+                # update_data["precio_venta"] = precio_venta
+            
             await inventarios_collection.update_one(
                 {"_id": inventario_existente["_id"]},
-                {
-                    "$set": {
-                        "cantidad": cantidad_nueva,
-                        "costo": costo_promedio,
-                        "fechaActualizacion": fecha_actual,
-                        "usuarioActualizacion": usuario_correo
-                    }
-                }
+                {"$set": update_data}
             )
-            print(f"✅ Inventario actualizado: {nombre} - Cantidad: {cantidad_actual} + {cantidad} = {cantidad_nueva}")
+            print(f"✅ Inventario actualizado: {nombre} - Cantidad: {cantidad_actual} + {cantidad} = {cantidad_nueva}, Precio venta: {precio_venta}")
         else:
             # Producto no existe: crear nuevo registro de inventario
             nuevo_inventario = {
@@ -108,6 +132,10 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
                 "estado": "activo"
             }
             
+            # Agregar precio_venta si está disponible
+            if precio_venta and precio_venta > 0:
+                nuevo_inventario["precio_venta"] = precio_venta
+            
             if codigo:
                 nuevo_inventario["codigo"] = codigo
             
@@ -115,7 +143,7 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
                 nuevo_inventario["productoId"] = producto_id
             
             await inventarios_collection.insert_one(nuevo_inventario)
-            print(f"✅ Nuevo producto agregado al inventario: {nombre} - Cantidad: {cantidad}")
+            print(f"✅ Nuevo producto agregado al inventario: {nombre} - Cantidad: {cantidad}, Precio venta: {precio_venta}")
         
         return True
     except Exception as e:
