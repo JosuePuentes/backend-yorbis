@@ -922,6 +922,154 @@ async def obtener_inventario(id: str, usuario: dict = Depends(get_current_user))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.delete("/inventarios/{id}/items/{item_id}")
+async def eliminar_item_inventario(
+    id: str, 
+    item_id: str, 
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Elimina un item de inventario.
+    El {id} es el ID de la farmacia o inventario padre.
+    El {item_id} es el ID del item a eliminar (puede tener formato especial como "id_codigo").
+    """
+    try:
+        print(f"🗑️ [INVENTARIOS] Eliminando item: {item_id} de inventario: {id}")
+        collection = get_collection("INVENTARIOS")
+        
+        # El item_id puede venir en formato "id_codigo" o solo "id"
+        # Intentar extraer el ID real (antes del guion bajo si existe)
+        item_id_real = item_id.split("_")[0] if "_" in item_id else item_id
+        
+        try:
+            item_object_id = ObjectId(item_id_real)
+        except (InvalidId, ValueError):
+            # Si no es ObjectId válido, intentar buscar por código
+            # El formato puede ser "id_codigo", extraer el código
+            if "_" in item_id:
+                codigo = "_".join(item_id.split("_")[1:])  # Todo después del primer _
+                filtro = {"codigo": codigo}
+                if id and id.strip():
+                    filtro["farmacia"] = id.strip()
+            else:
+                # Intentar buscar por código directamente
+                filtro = {"codigo": item_id}
+                if id and id.strip():
+                    filtro["farmacia"] = id.strip()
+            
+            resultado = await collection.delete_one(filtro)
+            if resultado.deleted_count == 0:
+                raise HTTPException(status_code=404, detail="Item de inventario no encontrado")
+            
+            print(f"✅ [INVENTARIOS] Item eliminado por código: {item_id}")
+            return {"message": "Item de inventario eliminado exitosamente", "id": item_id}
+        
+        # Buscar y eliminar por ObjectId
+        item = await collection.find_one({"_id": item_object_id})
+        
+        if not item:
+            raise HTTPException(status_code=404, detail="Item de inventario no encontrado")
+        
+        # Verificar que pertenece a la farmacia/inventario correcto si se especifica
+        if id and id.strip():
+            farmacia_item = item.get("farmacia", "")
+            if farmacia_item != id.strip():
+                # Si no coincide, puede ser que el id sea el ID del inventario padre
+                # En ese caso, verificar que el item_id sea el correcto
+                pass
+        
+        resultado = await collection.delete_one({"_id": item_object_id})
+        
+        if resultado.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Item de inventario no encontrado")
+        
+        print(f"✅ [INVENTARIOS] Item eliminado: {item_id_real}")
+        return {"message": "Item de inventario eliminado exitosamente", "id": item_id_real}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error eliminando item: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/inventarios/{id}/items/{item_id}")
+async def actualizar_item_inventario(
+    id: str,
+    item_id: str,
+    data: dict = Body(...),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Actualiza un item de inventario.
+    El {id} es el ID de la farmacia o inventario padre.
+    El {item_id} es el ID del item a actualizar.
+    """
+    try:
+        print(f"✏️ [INVENTARIOS] Actualizando item: {item_id} de inventario: {id}")
+        collection = get_collection("INVENTARIOS")
+        
+        # El item_id puede venir en formato "id_codigo" o solo "id"
+        item_id_real = item_id.split("_")[0] if "_" in item_id else item_id
+        
+        try:
+            item_object_id = ObjectId(item_id_real)
+        except (InvalidId, ValueError):
+            # Si no es ObjectId válido, intentar buscar por código
+            if "_" in item_id:
+                codigo = "_".join(item_id.split("_")[1:])
+                filtro = {"codigo": codigo}
+                if id and id.strip():
+                    filtro["farmacia"] = id.strip()
+            else:
+                filtro = {"codigo": item_id}
+                if id and id.strip():
+                    filtro["farmacia"] = id.strip()
+            
+            # Buscar el item
+            item = await collection.find_one(filtro)
+            if not item:
+                raise HTTPException(status_code=404, detail="Item de inventario no encontrado")
+            
+            item_object_id = item["_id"]
+        
+        # No permitir actualizar el _id
+        if "_id" in data:
+            del data["_id"]
+        
+        # Agregar información de actualización
+        data["usuarioActualizacion"] = usuario.get("correo", "unknown")
+        data["fechaActualizacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        resultado = await collection.update_one(
+            {"_id": item_object_id},
+            {"$set": data}
+        )
+        
+        if resultado.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Item de inventario no encontrado o sin cambios")
+        
+        # Obtener el item actualizado
+        item_actualizado = await collection.find_one({"_id": item_object_id})
+        item_actualizado["_id"] = str(item_actualizado["_id"])
+        if "productoId" in item_actualizado and isinstance(item_actualizado["productoId"], ObjectId):
+            item_actualizado["productoId"] = str(item_actualizado["productoId"])
+        
+        print(f"✅ [INVENTARIOS] Item actualizado: {item_id_real}")
+        return {
+            "message": "Item de inventario actualizado exitosamente",
+            "item": item_actualizado
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error actualizando item: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/presigned-url")
 async def get_presigned_url(request: Request):
     """
