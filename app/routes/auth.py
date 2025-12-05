@@ -833,6 +833,82 @@ async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/inventarios/{id}/items")
+async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_user)):
+    """
+    Obtiene los items de inventario.
+    El {id} puede ser el ID de la farmacia o el ID de un inventario específico.
+    Si es un ID de farmacia, retorna todos los items de esa farmacia.
+    Si es un ID de inventario, retorna ese item específico.
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        
+        # Intentar primero como ObjectId (inventario específico)
+        try:
+            object_id = ObjectId(id)
+            inventario = await collection.find_one({"_id": object_id})
+            if inventario:
+                inventario["_id"] = str(inventario["_id"])
+                return [inventario]  # Retornar como lista para consistencia
+        except (InvalidId, ValueError):
+            # Si no es un ObjectId válido, tratar como ID de farmacia
+            pass
+        
+        # Buscar por farmacia
+        inventarios = await collection.find({"farmacia": id}).to_list(length=None)
+        
+        # Si no se encontró nada, intentar buscar por cualquier campo que contenga el ID
+        if len(inventarios) == 0:
+            # Buscar en todos los campos posibles
+            inventarios = await collection.find({
+                "$or": [
+                    {"farmacia": id},
+                    {"_id": id},
+                    {"productoId": id}
+                ]
+            }).to_list(length=None)
+        
+        # Convertir _id a string
+        for inv in inventarios:
+            inv["_id"] = str(inv["_id"])
+            if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
+                inv["productoId"] = str(inv["productoId"])
+        
+        return inventarios
+    except Exception as e:
+        print(f"❌ Error obteniendo items de inventario: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/inventarios/{id}")
+async def obtener_inventario(id: str, usuario: dict = Depends(get_current_user)):
+    """
+    Obtiene un inventario específico por su ID.
+    """
+    try:
+        try:
+            object_id = ObjectId(id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID de inventario inválido")
+        
+        collection = get_collection("INVENTARIOS")
+        inventario = await collection.find_one({"_id": object_id})
+        
+        if not inventario:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado")
+        
+        inventario["_id"] = str(inventario["_id"])
+        if "productoId" in inventario and isinstance(inventario["productoId"], ObjectId):
+            inventario["productoId"] = str(inventario["productoId"])
+        
+        return inventario
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/presigned-url")
 async def get_presigned_url(request: Request):
     """
