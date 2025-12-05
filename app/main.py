@@ -1,6 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.v1.routes_example import router as example_router
 from app.routes import auth, metas
 from app.routes.pagoscpp import router as pagoscpp_router
@@ -33,6 +35,40 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600,
 )
+
+# Exception handler global para asegurar que CORS funcione incluso en errores
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Manejador global de excepciones que asegura que los headers CORS
+    se envíen incluso cuando hay errores 500.
+    """
+    import traceback
+    error_detail = str(exc)
+    traceback.print_exc()
+    
+    # Determinar el código de estado
+    status_code = 500
+    if isinstance(exc, StarletteHTTPException):
+        status_code = exc.status_code
+    elif isinstance(exc, RequestValidationError):
+        status_code = 422
+    
+    # Crear respuesta con headers CORS
+    origin = request.headers.get("origin")
+    headers = {}
+    
+    if origin in allowed_origins or any(origin.startswith(allowed) for allowed in allowed_origins if allowed.startswith("http://localhost")):
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        headers["Access-Control-Allow-Headers"] = "*"
+    
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": error_detail},
+        headers=headers
+    )
 
 
 @app.get("/")

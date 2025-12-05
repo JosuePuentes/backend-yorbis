@@ -214,10 +214,17 @@ async def crear_compra(compra_data: dict = Body(...), usuario_actual: dict = Dep
         # Convertir proveedorId a ObjectId si es necesario
         if compra_dict.get("proveedorId"):
             try:
-                compra_dict["proveedorId"] = ObjectId(compra_dict["proveedorId"])
-            except:
+                # Intentar convertir a ObjectId solo si es un string válido de 24 caracteres hex
+                proveedor_id = str(compra_dict["proveedorId"]).strip()
+                if len(proveedor_id) == 24:
+                    compra_dict["proveedorId"] = ObjectId(proveedor_id)
+                else:
+                    # Si no es un ObjectId válido, dejarlo como string
+                    compra_dict["proveedorId"] = proveedor_id
+            except (InvalidId, ValueError, TypeError) as e:
                 # Si no es un ObjectId válido, dejarlo como string
-                pass
+                print(f"[COMPRAS] No se pudo convertir proveedorId a ObjectId: {e}. Se guardará como string.")
+                compra_dict["proveedorId"] = str(compra_dict["proveedorId"])
         
         # Insertar la compra
         resultado = await collection.insert_one(compra_dict)
@@ -258,6 +265,12 @@ async def crear_compra(compra_data: dict = Body(...), usuario_actual: dict = Dep
                 nombre_producto = producto_data.get('nombre', 'Desconocido') if isinstance(producto_data, dict) else 'Desconocido'
                 productos_con_error.append(f"{nombre_producto} ({str(e)})")
         
+        # Convertir ObjectId a string en la respuesta
+        if "_id" in compra_dict:
+            compra_dict["_id"] = str(compra_dict["_id"])
+        if "proveedorId" in compra_dict and isinstance(compra_dict["proveedorId"], ObjectId):
+            compra_dict["proveedorId"] = str(compra_dict["proveedorId"])
+        
         # Respuesta
         respuesta = {
             "message": "Compra creada exitosamente",
@@ -285,8 +298,11 @@ async def crear_compra(compra_data: dict = Body(...), usuario_actual: dict = Dep
     except Exception as e:
         print(f"❌ Error creando compra: {e}")
         import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        error_trace = traceback.format_exc()
+        print(f"❌ Traceback completo:\n{error_trace}")
+        # Asegurar que el error se propaga con información útil
+        error_message = f"Error al crear compra: {str(e)}"
+        raise HTTPException(status_code=500, detail=error_message)
 
 @router.get("/compras/{compra_id}")
 async def obtener_compra(compra_id: str, usuario_actual: dict = Depends(get_current_user)):
