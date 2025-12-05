@@ -133,12 +133,15 @@ async def obtener_compras(
     usuario_actual: dict = Depends(get_current_user)
 ):
     """
-    Obtiene todas las compras.
+    Obtiene todas las compras con el objeto proveedor completo poblado.
     Puede filtrar por farmacia y rango de fechas.
     Requiere autenticación.
     """
     try:
+        print("🔍 [COMPRAS] Obteniendo compras...")
         collection = get_collection("COMPRAS")
+        proveedores_collection = get_collection("PROVEEDORES")
+        
         filtro = {}
         
         if farmacia:
@@ -153,14 +156,67 @@ async def obtener_compras(
         
         compras = await collection.find(filtro).sort("fecha", -1).to_list(length=None)
         
-        # Convertir _id a string
-        for compra in compras:
-            compra["_id"] = str(compra["_id"])
-            if "proveedorId" in compra and isinstance(compra["proveedorId"], ObjectId):
-                compra["proveedorId"] = str(compra["proveedorId"])
+        print(f"🔍 [COMPRAS] Encontradas {len(compras)} compras")
         
+        # Poblar el objeto proveedor completo para cada compra
+        for compra in compras:
+            # Convertir _id a string
+            compra["_id"] = str(compra["_id"])
+            
+            # Obtener proveedorId (puede ser ObjectId o string)
+            proveedor_id = compra.get("proveedorId")
+            
+            if proveedor_id:
+                try:
+                    # Intentar convertir a ObjectId si es string
+                    if isinstance(proveedor_id, str):
+                        # Verificar si es un ObjectId válido
+                        if len(proveedor_id) == 24:
+                            proveedor_id_obj = ObjectId(proveedor_id)
+                        else:
+                            # Si no es ObjectId válido, buscar por otro campo
+                            proveedor = await proveedores_collection.find_one({"nombre": proveedor_id})
+                            if proveedor:
+                                proveedor["_id"] = str(proveedor["_id"])
+                                compra["proveedor"] = proveedor
+                                compra["proveedorId"] = str(proveedor["_id"])
+                            else:
+                                print(f"⚠️ [COMPRAS] Proveedor no encontrado para ID: {proveedor_id}")
+                                compra["proveedor"] = None
+                            continue
+                    else:
+                        proveedor_id_obj = proveedor_id
+                    
+                    # Buscar el proveedor en la colección PROVEEDORES
+                    proveedor = await proveedores_collection.find_one({"_id": proveedor_id_obj})
+                    
+                    if proveedor:
+                        # Convertir _id a string
+                        proveedor["_id"] = str(proveedor["_id"])
+                        # Agregar el objeto proveedor completo a la compra
+                        compra["proveedor"] = proveedor
+                        # Mantener también el proveedorId como string para compatibilidad
+                        compra["proveedorId"] = str(proveedor["_id"])
+                        print(f"🔍 [COMPRAS] Proveedor poblado: {proveedor.get('nombre', 'Sin nombre')}")
+                    else:
+                        print(f"⚠️ [COMPRAS] Proveedor no encontrado para ID: {proveedor_id}")
+                        compra["proveedor"] = None
+                except (InvalidId, ValueError) as e:
+                    print(f"⚠️ [COMPRAS] Error al convertir proveedorId {proveedor_id}: {e}")
+                    compra["proveedor"] = None
+                except Exception as e:
+                    print(f"⚠️ [COMPRAS] Error al buscar proveedor: {e}")
+                    compra["proveedor"] = None
+            else:
+                print(f"⚠️ [COMPRAS] Compra sin proveedorId")
+                compra["proveedor"] = None
+        
+        print(f"🔍 [COMPRAS] Compras procesadas: {len(compras)}")
         return compras
     except Exception as e:
+        print(f"❌ [COMPRAS] Error obteniendo compras: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/compras")
@@ -307,7 +363,7 @@ async def crear_compra(compra_data: dict = Body(...), usuario_actual: dict = Dep
 @router.get("/compras/{compra_id}")
 async def obtener_compra(compra_id: str, usuario_actual: dict = Depends(get_current_user)):
     """
-    Obtiene una compra por su ID.
+    Obtiene una compra por su ID con el objeto proveedor completo poblado.
     Requiere autenticación.
     """
     try:
@@ -317,14 +373,53 @@ async def obtener_compra(compra_id: str, usuario_actual: dict = Depends(get_curr
             raise HTTPException(status_code=400, detail="ID de compra inválido")
         
         collection = get_collection("COMPRAS")
+        proveedores_collection = get_collection("PROVEEDORES")
+        
         compra = await collection.find_one({"_id": object_id})
         
         if not compra:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
         
         compra["_id"] = str(compra["_id"])
-        if "proveedorId" in compra and isinstance(compra["proveedorId"], ObjectId):
-            compra["proveedorId"] = str(compra["proveedorId"])
+        
+        # Poblar el objeto proveedor completo
+        proveedor_id = compra.get("proveedorId")
+        
+        if proveedor_id:
+            try:
+                # Intentar convertir a ObjectId si es string
+                if isinstance(proveedor_id, str):
+                    if len(proveedor_id) == 24:
+                        proveedor_id_obj = ObjectId(proveedor_id)
+                    else:
+                        # Buscar por nombre u otro campo
+                        proveedor = await proveedores_collection.find_one({"nombre": proveedor_id})
+                        if proveedor:
+                            proveedor["_id"] = str(proveedor["_id"])
+                            compra["proveedor"] = proveedor
+                            compra["proveedorId"] = str(proveedor["_id"])
+                        else:
+                            compra["proveedor"] = None
+                        return compra
+                else:
+                    proveedor_id_obj = proveedor_id
+                
+                # Buscar el proveedor
+                proveedor = await proveedores_collection.find_one({"_id": proveedor_id_obj})
+                
+                if proveedor:
+                    proveedor["_id"] = str(proveedor["_id"])
+                    compra["proveedor"] = proveedor
+                    compra["proveedorId"] = str(proveedor["_id"])
+                else:
+                    compra["proveedor"] = None
+            except (InvalidId, ValueError):
+                compra["proveedor"] = None
+            except Exception as e:
+                print(f"⚠️ [COMPRAS] Error al buscar proveedor: {e}")
+                compra["proveedor"] = None
+        else:
+            compra["proveedor"] = None
         
         return compra
     except HTTPException:
