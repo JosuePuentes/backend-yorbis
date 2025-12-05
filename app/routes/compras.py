@@ -34,22 +34,34 @@ class Compra(BaseModel):
     observaciones: Optional[str] = None
     numeroFactura: Optional[str] = None
 
-async def actualizar_inventario(producto: ProductoCompra, farmacia: str, usuario_correo: str):
+async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_correo: str):
     """
     Actualiza el inventario sumando los productos de la compra.
     Si el producto existe, suma la cantidad. Si no existe, lo crea.
+    Acepta un dict directamente para mayor flexibilidad.
     """
     try:
         inventarios_collection = get_collection("INVENTARIOS")
+        
+        # Extraer datos del producto (acepta dict directamente)
+        nombre = producto_data.get("nombre", "")
+        cantidad = float(producto_data.get("cantidad", 0))
+        precio_unitario = float(producto_data.get("precioUnitario", 0))
+        precio_total = float(producto_data.get("precioTotal", 0))
+        codigo = producto_data.get("codigo")
+        producto_id = producto_data.get("productoId")
+        
+        if not nombre:
+            raise ValueError("El producto debe tener un nombre")
         
         # Buscar si ya existe un inventario para este producto en esta farmacia
         # Buscar por código si existe, o por nombre
         filtro = {"farmacia": farmacia}
         
-        if producto.codigo:
-            filtro["codigo"] = producto.codigo
+        if codigo:
+            filtro["codigo"] = codigo
         else:
-            filtro["nombre"] = producto.nombre
+            filtro["nombre"] = nombre
         
         inventario_existente = await inventarios_collection.find_one(filtro)
         
@@ -59,17 +71,17 @@ async def actualizar_inventario(producto: ProductoCompra, farmacia: str, usuario
         
         if inventario_existente:
             # Producto existe: sumar cantidad y actualizar costo promedio
-            cantidad_actual = inventario_existente.get("cantidad", 0)
-            costo_actual = inventario_existente.get("costo", 0)
-            cantidad_nueva = cantidad_actual + producto.cantidad
+            cantidad_actual = float(inventario_existente.get("cantidad", 0))
+            costo_actual = float(inventario_existente.get("costo", 0))
+            cantidad_nueva = cantidad_actual + cantidad
             
             # Calcular nuevo costo promedio ponderado
             if cantidad_actual > 0:
                 costo_total_actual = cantidad_actual * costo_actual
-                costo_total_nuevo = producto.precioTotal
+                costo_total_nuevo = precio_total
                 costo_promedio = (costo_total_actual + costo_total_nuevo) / cantidad_nueva
             else:
-                costo_promedio = producto.precioUnitario
+                costo_promedio = precio_unitario
             
             # Actualizar inventario
             await inventarios_collection.update_one(
@@ -83,31 +95,34 @@ async def actualizar_inventario(producto: ProductoCompra, farmacia: str, usuario
                     }
                 }
             )
-            print(f"✅ Inventario actualizado: {producto.nombre} - Cantidad: {cantidad_actual} + {producto.cantidad} = {cantidad_nueva}")
+            print(f"✅ Inventario actualizado: {nombre} - Cantidad: {cantidad_actual} + {cantidad} = {cantidad_nueva}")
         else:
             # Producto no existe: crear nuevo registro de inventario
             nuevo_inventario = {
                 "farmacia": farmacia,
-                "nombre": producto.nombre,
-                "cantidad": producto.cantidad,
-                "costo": producto.precioUnitario,
+                "nombre": nombre,
+                "cantidad": cantidad,
+                "costo": precio_unitario,
                 "usuarioCorreo": usuario_correo,
                 "fecha": fecha_actual,
                 "estado": "activo"
             }
             
-            if producto.codigo:
-                nuevo_inventario["codigo"] = producto.codigo
+            if codigo:
+                nuevo_inventario["codigo"] = codigo
             
-            if producto.productoId:
-                nuevo_inventario["productoId"] = producto.productoId
+            if producto_id:
+                nuevo_inventario["productoId"] = producto_id
             
             await inventarios_collection.insert_one(nuevo_inventario)
-            print(f"✅ Nuevo producto agregado al inventario: {producto.nombre} - Cantidad: {producto.cantidad}")
+            print(f"✅ Nuevo producto agregado al inventario: {nombre} - Cantidad: {cantidad}")
         
         return True
     except Exception as e:
-        print(f"❌ Error actualizando inventario para {producto.nombre}: {e}")
+        nombre_producto = producto_data.get("nombre", "Desconocido") if isinstance(producto_data, dict) else "Desconocido"
+        print(f"❌ Error actualizando inventario para {nombre_producto}: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 @router.get("/compras")
@@ -218,19 +233,30 @@ async def crear_compra(compra_data: dict = Body(...), usuario_actual: dict = Dep
         
         for producto_data in productos:
             try:
-                # Convertir dict a ProductoCompra si es necesario
-                if isinstance(producto_data, dict):
-                    producto = ProductoCompra(**producto_data)
-                else:
-                    producto = producto_data
+                # Asegurar que producto_data es un dict
+                if not isinstance(producto_data, dict):
+                    raise ValueError(f"El producto debe ser un objeto/dict, recibido: {type(producto_data)}")
                 
-                await actualizar_inventario(producto, farmacia, usuario_correo)
-                nombre_producto = producto.nombre if hasattr(producto, 'nombre') else producto_data.get('nombre', 'Desconocido')
+                # Validar campos mínimos requeridos
+                if "nombre" not in producto_data:
+                    raise ValueError("El producto debe tener el campo 'nombre'")
+                if "cantidad" not in producto_data:
+                    raise ValueError("El producto debe tener el campo 'cantidad'")
+                if "precioUnitario" not in producto_data:
+                    raise ValueError("El producto debe tener el campo 'precioUnitario'")
+                if "precioTotal" not in producto_data:
+                    raise ValueError("El producto debe tener el campo 'precioTotal'")
+                
+                # Actualizar inventario directamente con el dict
+                await actualizar_inventario(producto_data, farmacia, usuario_correo)
+                nombre_producto = producto_data.get('nombre', 'Desconocido')
                 productos_actualizados.append(nombre_producto)
             except Exception as e:
                 print(f"❌ Error actualizando producto: {e}")
+                import traceback
+                traceback.print_exc()
                 nombre_producto = producto_data.get('nombre', 'Desconocido') if isinstance(producto_data, dict) else 'Desconocido'
-                productos_con_error.append(nombre_producto)
+                productos_con_error.append(f"{nombre_producto} ({str(e)})")
         
         # Respuesta
         respuesta = {
