@@ -149,29 +149,57 @@ async def obtener_compras(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/compras")
-async def crear_compra(compra: Compra, usuario_actual: dict = Depends(get_current_user)):
+async def crear_compra(compra_data: dict = Body(...), usuario_actual: dict = Depends(get_current_user)):
     """
     Crea una nueva compra.
     IMPORTANTE: Al crear una compra, los productos se suman automáticamente al inventario.
     Requiere autenticación.
     """
     try:
+        print(f"[COMPRAS] Datos recibidos: {compra_data}")
+        
         collection = get_collection("COMPRAS")
         usuario_correo = usuario_actual.get("correo", "unknown")
         
-        # Validar que tenga productos
-        if not compra.productos or len(compra.productos) == 0:
+        # Validar campos requeridos
+        if "productos" not in compra_data:
+            raise HTTPException(status_code=400, detail="El campo 'productos' es requerido")
+        
+        if not compra_data["productos"] or len(compra_data["productos"]) == 0:
             raise HTTPException(status_code=400, detail="La compra debe tener al menos un producto")
         
+        if "farmacia" not in compra_data:
+            raise HTTPException(status_code=400, detail="El campo 'farmacia' es requerido")
+        
+        if "proveedorId" not in compra_data:
+            raise HTTPException(status_code=400, detail="El campo 'proveedorId' es requerido")
+        
+        # Validar estructura de productos
+        for i, producto in enumerate(compra_data["productos"]):
+            if not isinstance(producto, dict):
+                raise HTTPException(status_code=400, detail=f"El producto en la posición {i} debe ser un objeto")
+            
+            if "nombre" not in producto:
+                raise HTTPException(status_code=400, detail=f"El producto en la posición {i} debe tener el campo 'nombre'")
+            
+            if "cantidad" not in producto:
+                raise HTTPException(status_code=400, detail=f"El producto en la posición {i} debe tener el campo 'cantidad'")
+            
+            if "precioUnitario" not in producto:
+                raise HTTPException(status_code=400, detail=f"El producto en la posición {i} debe tener el campo 'precioUnitario'")
+            
+            if "precioTotal" not in producto:
+                raise HTTPException(status_code=400, detail=f"El producto en la posición {i} debe tener el campo 'precioTotal'")
+        
         # Crear el documento de compra
-        compra_dict = compra.dict()
+        compra_dict = compra_data.copy()
         compra_dict["usuarioCreacion"] = usuario_correo
         compra_dict["fechaCreacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Convertir proveedorId a ObjectId si es necesario
-        if compra.proveedorId:
+        if compra_dict.get("proveedorId"):
             try:
-                compra_dict["proveedorId"] = ObjectId(compra.proveedorId)
+                compra_dict["proveedorId"] = ObjectId(compra_dict["proveedorId"])
             except:
                 # Si no es un ObjectId válido, dejarlo como string
                 pass
@@ -185,13 +213,24 @@ async def crear_compra(compra: Compra, usuario_actual: dict = Depends(get_curren
         productos_actualizados = []
         productos_con_error = []
         
-        for producto in compra.productos:
+        farmacia = compra_dict["farmacia"]
+        productos = compra_dict["productos"]
+        
+        for producto_data in productos:
             try:
-                await actualizar_inventario(producto, compra.farmacia, usuario_correo)
-                productos_actualizados.append(producto.nombre)
+                # Convertir dict a ProductoCompra si es necesario
+                if isinstance(producto_data, dict):
+                    producto = ProductoCompra(**producto_data)
+                else:
+                    producto = producto_data
+                
+                await actualizar_inventario(producto, farmacia, usuario_correo)
+                nombre_producto = producto.nombre if hasattr(producto, 'nombre') else producto_data.get('nombre', 'Desconocido')
+                productos_actualizados.append(nombre_producto)
             except Exception as e:
-                print(f"❌ Error actualizando {producto.nombre}: {e}")
-                productos_con_error.append(producto.nombre)
+                print(f"❌ Error actualizando producto: {e}")
+                nombre_producto = producto_data.get('nombre', 'Desconocido') if isinstance(producto_data, dict) else 'Desconocido'
+                productos_con_error.append(nombre_producto)
         
         # Respuesta
         respuesta = {
