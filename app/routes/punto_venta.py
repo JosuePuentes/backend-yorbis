@@ -1,12 +1,13 @@
 """
 Rutas para punto de venta
 """
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Body
 from app.db.mongo import get_collection
 from app.core.get_current_user import get_current_user
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
 from bson.errors import InvalidId
+from datetime import datetime
 import re
 
 router = APIRouter()
@@ -124,6 +125,166 @@ async def buscar_productos_punto_venta(
         
     except Exception as e:
         print(f"❌ [PUNTO_VENTA] Error buscando productos: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/punto-venta/ventas")
+async def crear_venta(
+    venta_data: dict = Body(...),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Crea una nueva venta en el punto de venta.
+    Incluye el campo descuento_por_divisa (opcional, 0-100).
+    Requiere autenticación.
+    """
+    try:
+        print(f"💰 [PUNTO_VENTA] Creando venta - Usuario: {usuario_actual.get('correo', 'unknown')}")
+        
+        # Validar y procesar descuento_por_divisa
+        descuento_por_divisa = venta_data.get("descuento_por_divisa", 0)
+        
+        # Convertir a float si es necesario
+        if descuento_por_divisa is None:
+            descuento_por_divisa = 0
+        else:
+            try:
+                descuento_por_divisa = float(descuento_por_divisa)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="El campo 'descuento_por_divisa' debe ser un número"
+                )
+        
+        # Validar rango 0-100
+        if descuento_por_divisa < 0 or descuento_por_divisa > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="El campo 'descuento_por_divisa' debe estar entre 0 y 100"
+            )
+        
+        # Agregar el campo al documento de venta
+        venta_dict = venta_data.copy()
+        venta_dict["descuento_por_divisa"] = descuento_por_divisa
+        
+        # Agregar información de creación
+        venta_dict["usuarioCreacion"] = usuario_actual.get("correo", "unknown")
+        venta_dict["fechaCreacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Guardar en la base de datos
+        ventas_collection = get_collection("VENTAS")
+        resultado = await ventas_collection.insert_one(venta_dict)
+        venta_id = str(resultado.inserted_id)
+        
+        # Convertir _id a string en la respuesta
+        venta_dict["_id"] = venta_id
+        
+        print(f"✅ [PUNTO_VENTA] Venta creada: {venta_id} - Descuento por divisa: {descuento_por_divisa}%")
+        
+        return {
+            "message": "Venta creada exitosamente",
+            "id": venta_id,
+            "venta": venta_dict
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [PUNTO_VENTA] Error creando venta: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/punto-venta/ventas")
+async def obtener_ventas(
+    sucursal: Optional[str] = Query(None, description="ID de la sucursal (farmacia)"),
+    fecha_inicio: Optional[str] = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
+    fecha_fin: Optional[str] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Obtiene todas las ventas del punto de venta.
+    Puede filtrar por sucursal y rango de fechas.
+    Incluye el campo descuento_por_divisa en cada venta.
+    Requiere autenticación.
+    """
+    try:
+        print(f"📋 [PUNTO_VENTA] Obteniendo ventas - Sucursal: {sucursal}")
+        
+        ventas_collection = get_collection("VENTAS")
+        filtro = {}
+        
+        # Filtrar por sucursal si se especifica
+        if sucursal and sucursal.strip():
+            filtro["sucursal"] = sucursal.strip()
+            # También buscar por farmacia (compatibilidad)
+            filtro = {"$or": [{"sucursal": sucursal.strip()}, {"farmacia": sucursal.strip()}]}
+        
+        # Filtrar por rango de fechas
+        if fecha_inicio and fecha_fin:
+            filtro["fecha"] = {"$gte": fecha_inicio, "$lte": fecha_fin}
+        elif fecha_inicio:
+            filtro["fecha"] = {"$gte": fecha_inicio}
+        elif fecha_fin:
+            filtro["fecha"] = {"$lte": fecha_fin}
+        
+        ventas = await ventas_collection.find(filtro).sort("fechaCreacion", -1).to_list(length=None)
+        
+        # Convertir _id a string y asegurar que descuento_por_divisa esté presente
+        for venta in ventas:
+            venta["_id"] = str(venta["_id"])
+            # Asegurar que descuento_por_divisa esté presente (por defecto 0)
+            if "descuento_por_divisa" not in venta:
+                venta["descuento_por_divisa"] = 0
+        
+        print(f"📋 [PUNTO_VENTA] Encontradas {len(ventas)} ventas")
+        return ventas
+        
+    except Exception as e:
+        print(f"❌ [PUNTO_VENTA] Error obteniendo ventas: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/punto-venta/ventas/usuario")
+async def obtener_ventas_usuario(
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Obtiene las ventas del usuario actual.
+    Incluye el campo descuento_por_divisa en cada venta.
+    Requiere autenticación.
+    """
+    try:
+        usuario_correo = usuario_actual.get("correo", "unknown")
+        print(f"📋 [PUNTO_VENTA] Obteniendo ventas del usuario: {usuario_correo}")
+        
+        ventas_collection = get_collection("VENTAS")
+        
+        # Buscar ventas del usuario actual
+        filtro = {
+            "$or": [
+                {"usuarioCreacion": usuario_correo},
+                {"usuario": usuario_correo},
+                {"vendedor": usuario_correo}
+            ]
+        }
+        
+        ventas = await ventas_collection.find(filtro).sort("fechaCreacion", -1).to_list(length=None)
+        
+        # Convertir _id a string y asegurar que descuento_por_divisa esté presente
+        for venta in ventas:
+            venta["_id"] = str(venta["_id"])
+            # Asegurar que descuento_por_divisa esté presente (por defecto 0)
+            if "descuento_por_divisa" not in venta:
+                venta["descuento_por_divisa"] = 0
+        
+        print(f"📋 [PUNTO_VENTA] Encontradas {len(ventas)} ventas del usuario")
+        return ventas
+        
+    except Exception as e:
+        print(f"❌ [PUNTO_VENTA] Error obteniendo ventas del usuario: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
