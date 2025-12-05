@@ -11,6 +11,7 @@ from app.routes.proveedores import router as proveedores_router
 from app.routes.compras import router as compras_router
 from app.routes.productos import router as productos_router
 from app.routes.punto_venta import router as punto_venta_router
+from app.routes.clientes import router as clientes_router
 
 
 app = FastAPI(
@@ -91,3 +92,4 @@ app.include_router(proveedores_router, tags=["proveedores"])
 app.include_router(compras_router, tags=["compras"])
 app.include_router(productos_router, tags=["productos"])
 app.include_router(punto_venta_router, tags=["punto-venta"])
+app.include_router(clientes_router, tags=["clientes"])

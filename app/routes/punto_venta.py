@@ -289,3 +289,76 @@ async def obtener_ventas_usuario(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/punto-venta/tasa-del-dia")
+async def obtener_tasa_del_dia(
+    fecha: Optional[str] = Query(None, description="Fecha en formato YYYY-MM-DD (opcional, por defecto hoy)"),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Obtiene la tasa de cambio del día.
+    Si no se especifica fecha, retorna la tasa del día actual.
+    Requiere autenticación.
+    """
+    try:
+        # Si no se especifica fecha, usar la fecha actual
+        if not fecha:
+            fecha = datetime.now().strftime("%Y-%m-%d")
+        
+        print(f"💱 [PUNTO_VENTA] Obteniendo tasa del día: {fecha}")
+        
+        # Buscar en la colección de cuadres o tasas
+        cuadres_collection = get_collection("CUADRES")
+        
+        # Buscar cuadre de esa fecha
+        cuadre = await cuadres_collection.find_one({"dia": fecha})
+        
+        if cuadre and "tasa" in cuadre:
+            tasa = float(cuadre["tasa"])
+            print(f"💱 [PUNTO_VENTA] Tasa encontrada: {tasa} para fecha: {fecha}")
+            return {
+                "fecha": fecha,
+                "tasa": tasa
+            }
+        
+        # Si no se encuentra en cuadres, buscar en una colección de tasas si existe
+        tasas_collection = get_collection("TASAS")
+        tasa_doc = await tasas_collection.find_one({"fecha": fecha})
+        
+        if tasa_doc and "tasa" in tasa_doc:
+            tasa = float(tasa_doc["tasa"])
+            print(f"💱 [PUNTO_VENTA] Tasa encontrada en colección TASAS: {tasa}")
+            return {
+                "fecha": fecha,
+                "tasa": tasa
+            }
+        
+        # Si no se encuentra, retornar tasa por defecto (1.0) o la última tasa conocida
+        # Buscar la última tasa disponible
+        ultima_tasa = await cuadres_collection.find_one(
+            {"tasa": {"$exists": True, "$ne": None}},
+            sort=[("dia", -1)]
+        )
+        
+        if ultima_tasa and "tasa" in ultima_tasa:
+            tasa = float(ultima_tasa["tasa"])
+            print(f"💱 [PUNTO_VENTA] Usando última tasa conocida: {tasa} del día {ultima_tasa.get('dia', 'desconocido')}")
+            return {
+                "fecha": fecha,
+                "tasa": tasa,
+                "nota": "Tasa de fecha anterior (no se encontró tasa para esta fecha)"
+            }
+        
+        # Si no hay ninguna tasa, retornar 1.0 por defecto
+        print(f"⚠️ [PUNTO_VENTA] No se encontró tasa, usando valor por defecto: 1.0")
+        return {
+            "fecha": fecha,
+            "tasa": 1.0,
+            "nota": "Tasa por defecto (no se encontró tasa en el sistema)"
+        }
+        
+    except Exception as e:
+        print(f"❌ [PUNTO_VENTA] Error obteniendo tasa del día: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
