@@ -158,7 +158,10 @@ async def obtener_compras(
         
         print(f"🔍 [COMPRAS] Encontradas {len(compras)} compras")
         
-        # Poblar el objeto proveedor completo para cada compra
+        # Obtener colección de inventarios para buscar precios de venta
+        inventarios_collection = get_collection("INVENTARIOS")
+        
+        # Poblar el objeto proveedor completo y agregar utilidad a cada producto
         for compra in compras:
             # Convertir _id a string
             compra["_id"] = str(compra["_id"])
@@ -210,8 +213,97 @@ async def obtener_compras(
             else:
                 print(f"⚠️ [COMPRAS] Compra sin proveedorId")
                 compra["proveedor"] = None
+            
+            # Agregar utilidad a cada producto en la compra
+            productos = compra.get("productos", [])
+            farmacia_compra = compra.get("farmacia", "")
+            
+            for producto in productos:
+                try:
+                    # Obtener precio de compra (precioUnitario)
+                    precio_compra = float(producto.get("precioUnitario", 0))
+                    cantidad = float(producto.get("cantidad", 1))
+                    
+                    # Buscar el producto en el inventario para obtener precio_venta
+                    nombre_producto = producto.get("nombre", "")
+                    codigo_producto = producto.get("codigo")
+                    
+                    filtro_inventario = {"farmacia": farmacia_compra}
+                    if codigo_producto:
+                        filtro_inventario["codigo"] = codigo_producto
+                    else:
+                        filtro_inventario["nombre"] = nombre_producto
+                    
+                    inventario = await inventarios_collection.find_one(filtro_inventario)
+                    
+                    if inventario:
+                        # Obtener precio_venta del inventario
+                        precio_venta = float(inventario.get("precio_venta", 0))
+                        
+                        if precio_venta > 0:
+                            # Calcular utilidad en dinero
+                            utilidad_unitaria = precio_venta - precio_compra
+                            utilidad_total = utilidad_unitaria * cantidad
+                            
+                            # Calcular porcentaje de ganancia
+                            if precio_compra > 0:
+                                porcentaje_ganancia = (utilidad_unitaria / precio_compra) * 100
+                            else:
+                                porcentaje_ganancia = 0
+                            
+                            # Agregar campos de utilidad al producto
+                            producto["precio_venta"] = precio_venta
+                            producto["utilidad"] = round(utilidad_unitaria, 2)
+                            producto["utilidad_contable"] = round(utilidad_total, 2)
+                            producto["porcentaje_ganancia"] = round(porcentaje_ganancia, 2)
+                        else:
+                            # Si no hay precio_venta, verificar si viene en el producto
+                            precio_venta_producto = producto.get("precio_venta", 0)
+                            if precio_venta_producto and precio_venta_producto > 0:
+                                precio_venta = float(precio_venta_producto)
+                                utilidad_unitaria = precio_venta - precio_compra
+                                utilidad_total = utilidad_unitaria * cantidad
+                                
+                                if precio_compra > 0:
+                                    porcentaje_ganancia = (utilidad_unitaria / precio_compra) * 100
+                                else:
+                                    porcentaje_ganancia = 0
+                                
+                                producto["precio_venta"] = precio_venta
+                                producto["utilidad"] = round(utilidad_unitaria, 2)
+                                producto["utilidad_contable"] = round(utilidad_total, 2)
+                                producto["porcentaje_ganancia"] = round(porcentaje_ganancia, 2)
+                            else:
+                                # No hay precio_venta disponible
+                                producto["precio_venta"] = 0
+                                producto["utilidad"] = 0
+                                producto["utilidad_contable"] = 0
+                                producto["porcentaje_ganancia"] = 0
+                    else:
+                        # Producto no encontrado en inventario, verificar si viene utilidad en el producto
+                        if "utilidad" in producto or "precio_venta" in producto:
+                            # Ya tiene utilidad, mantenerla
+                            pass
+                        else:
+                            # No hay información de utilidad
+                            producto["precio_venta"] = 0
+                            producto["utilidad"] = 0
+                            producto["utilidad_contable"] = 0
+                            producto["porcentaje_ganancia"] = 0
+                except Exception as e:
+                    print(f"⚠️ [COMPRAS] Error calculando utilidad para producto {producto.get('nombre', 'Desconocido')}: {e}")
+                    # Asegurar que los campos existan aunque haya error
+                    if "precio_venta" not in producto:
+                        producto["precio_venta"] = producto.get("precio_venta", 0)
+                    if "utilidad" not in producto:
+                        producto["utilidad"] = producto.get("utilidad", 0)
+                    if "utilidad_contable" not in producto:
+                        producto["utilidad_contable"] = producto.get("utilidad_contable", 0)
+                    if "porcentaje_ganancia" not in producto:
+                        producto["porcentaje_ganancia"] = producto.get("porcentaje_ganancia", 0)
         
         print(f"🔍 [COMPRAS] Compras procesadas: {len(compras)}")
+        print(f"🔍 [INVENTARIOS] Compras obtenidas: {len(compras)} compras con productos y utilidad calculada")
         return compras
     except Exception as e:
         print(f"❌ [COMPRAS] Error obteniendo compras: {e}")
@@ -374,6 +466,7 @@ async def obtener_compra(compra_id: str, usuario_actual: dict = Depends(get_curr
         
         collection = get_collection("COMPRAS")
         proveedores_collection = get_collection("PROVEEDORES")
+        inventarios_collection = get_collection("INVENTARIOS")
         
         compra = await collection.find_one({"_id": object_id})
         
@@ -420,6 +513,94 @@ async def obtener_compra(compra_id: str, usuario_actual: dict = Depends(get_curr
                 compra["proveedor"] = None
         else:
             compra["proveedor"] = None
+        
+        # Agregar utilidad a cada producto en la compra
+        productos = compra.get("productos", [])
+        farmacia_compra = compra.get("farmacia", "")
+        
+        for producto in productos:
+            try:
+                # Obtener precio de compra (precioUnitario)
+                precio_compra = float(producto.get("precioUnitario", 0))
+                cantidad = float(producto.get("cantidad", 1))
+                
+                # Buscar el producto en el inventario para obtener precio_venta
+                nombre_producto = producto.get("nombre", "")
+                codigo_producto = producto.get("codigo")
+                
+                filtro_inventario = {"farmacia": farmacia_compra}
+                if codigo_producto:
+                    filtro_inventario["codigo"] = codigo_producto
+                else:
+                    filtro_inventario["nombre"] = nombre_producto
+                
+                inventario = await inventarios_collection.find_one(filtro_inventario)
+                
+                if inventario:
+                    # Obtener precio_venta del inventario
+                    precio_venta = float(inventario.get("precio_venta", 0))
+                    
+                    if precio_venta > 0:
+                        # Calcular utilidad en dinero
+                        utilidad_unitaria = precio_venta - precio_compra
+                        utilidad_total = utilidad_unitaria * cantidad
+                        
+                        # Calcular porcentaje de ganancia
+                        if precio_compra > 0:
+                            porcentaje_ganancia = (utilidad_unitaria / precio_compra) * 100
+                        else:
+                            porcentaje_ganancia = 0
+                        
+                        # Agregar campos de utilidad al producto
+                        producto["precio_venta"] = precio_venta
+                        producto["utilidad"] = round(utilidad_unitaria, 2)
+                        producto["utilidad_contable"] = round(utilidad_total, 2)
+                        producto["porcentaje_ganancia"] = round(porcentaje_ganancia, 2)
+                    else:
+                        # Si no hay precio_venta, verificar si viene en el producto
+                        precio_venta_producto = producto.get("precio_venta", 0)
+                        if precio_venta_producto and precio_venta_producto > 0:
+                            precio_venta = float(precio_venta_producto)
+                            utilidad_unitaria = precio_venta - precio_compra
+                            utilidad_total = utilidad_unitaria * cantidad
+                            
+                            if precio_compra > 0:
+                                porcentaje_ganancia = (utilidad_unitaria / precio_compra) * 100
+                            else:
+                                porcentaje_ganancia = 0
+                            
+                            producto["precio_venta"] = precio_venta
+                            producto["utilidad"] = round(utilidad_unitaria, 2)
+                            producto["utilidad_contable"] = round(utilidad_total, 2)
+                            producto["porcentaje_ganancia"] = round(porcentaje_ganancia, 2)
+                        else:
+                            # No hay precio_venta disponible
+                            producto["precio_venta"] = 0
+                            producto["utilidad"] = 0
+                            producto["utilidad_contable"] = 0
+                            producto["porcentaje_ganancia"] = 0
+                else:
+                    # Producto no encontrado en inventario, verificar si viene utilidad en el producto
+                    if "utilidad" in producto or "precio_venta" in producto:
+                        # Ya tiene utilidad, mantenerla
+                        pass
+                    else:
+                        # No hay información de utilidad
+                        producto["precio_venta"] = 0
+                        producto["utilidad"] = 0
+                        producto["utilidad_contable"] = 0
+                        producto["porcentaje_ganancia"] = 0
+            except Exception as e:
+                print(f"⚠️ [COMPRAS] Error calculando utilidad para producto {producto.get('nombre', 'Desconocido')}: {e}")
+                # Asegurar que los campos existan aunque haya error
+                if "precio_venta" not in producto:
+                    producto["precio_venta"] = producto.get("precio_venta", 0)
+                if "utilidad" not in producto:
+                    producto["utilidad"] = producto.get("utilidad", 0)
+                if "utilidad_contable" not in producto:
+                    producto["utilidad_contable"] = producto.get("utilidad_contable", 0)
+                if "porcentaje_ganancia" not in producto:
+                    producto["porcentaje_ganancia"] = producto.get("porcentaje_ganancia", 0)
         
         return compra
     except HTTPException:
