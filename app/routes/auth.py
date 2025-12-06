@@ -1093,6 +1093,51 @@ async def obtener_bancos(usuario: dict = Depends(get_current_user)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/bancos")
+async def crear_banco(
+    banco_data: dict = Body(...),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Crea un nuevo banco.
+    Requiere autenticación.
+    """
+    try:
+        print(f"🏦 [BANCOS] Creando banco - Usuario: {usuario.get('correo', 'unknown')}")
+        collection = get_collection("BANCOS")
+        
+        # Agregar información de creación
+        banco_dict = banco_data.copy()
+        banco_dict["usuarioCreacion"] = usuario.get("correo", "unknown")
+        banco_dict["fechaCreacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Inicializar campos si no existen
+        if "saldo" not in banco_dict:
+            banco_dict["saldo"] = 0.0
+        if "movimientos" not in banco_dict:
+            banco_dict["movimientos"] = []
+        
+        # Insertar banco
+        resultado = await collection.insert_one(banco_dict)
+        banco_id = str(resultado.inserted_id)
+        
+        # Convertir _id a string en la respuesta
+        banco_dict["_id"] = banco_id
+        
+        print(f"✅ [BANCOS] Banco creado: {banco_id}")
+        
+        return {
+            "message": "Banco creado exitosamente",
+            "id": banco_id,
+            "banco": banco_dict
+        }
+        
+    except Exception as e:
+        print(f"❌ [BANCOS] Error creando banco: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/presigned-url")
 async def get_presigned_url(request: Request):
     """
