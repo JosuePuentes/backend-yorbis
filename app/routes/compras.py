@@ -330,6 +330,16 @@ async def obtener_compras(
                     if "porcentaje_ganancia" not in producto:
                         producto["porcentaje_ganancia"] = producto.get("porcentaje_ganancia", 0)
         
+        # Incluir pagos en cada compra
+        for compra in compras:
+            pagos = compra.get("pagos", [])
+            for pago in pagos:
+                if "_id" in pago and isinstance(pago["_id"], ObjectId):
+                    pago["_id"] = str(pago["_id"])
+                if "banco_id" in pago and isinstance(pago["banco_id"], ObjectId):
+                    pago["banco_id"] = str(pago["banco_id"])
+            compra["pagos"] = pagos
+        
         print(f"🔍 [COMPRAS] Compras procesadas: {len(compras)}")
         print(f"🔍 [INVENTARIOS] Compras obtenidas: {len(compras)} compras con productos y utilidad calculada")
         return compras
@@ -671,10 +681,202 @@ async def obtener_compra(compra_id: str, usuario_actual: dict = Depends(get_curr
                 if "porcentaje_ganancia" not in producto:
                     producto["porcentaje_ganancia"] = producto.get("porcentaje_ganancia", 0)
         
+        # Incluir pagos en la respuesta
+        pagos = compra.get("pagos", [])
+        for pago in pagos:
+            if "_id" in pago and isinstance(pago["_id"], ObjectId):
+                pago["_id"] = str(pago["_id"])
+            if "banco_id" in pago and isinstance(pago["banco_id"], ObjectId):
+                pago["banco_id"] = str(pago["banco_id"])
+        
+        compra["pagos"] = pagos
+        
         return compra
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/compras/{compra_id}/pagos")
+async def crear_pago_compra(
+    compra_id: str,
+    pago_data: dict = Body(...),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Crea un pago para una compra.
+    Actualiza el monto_abonado, monto_restante y estado de la compra.
+    Actualiza el saldo del banco (resta el monto).
+    Crea un movimiento en el historial del banco.
+    Requiere autenticación.
+    """
+    try:
+        print(f"💳 [COMPRAS] Creando pago para compra: {compra_id}")
+        
+        compras_collection = get_collection("COMPRAS")
+        bancos_collection = get_collection("BANCOS")
+        
+        # Validar compra_id
+        try:
+            compra_object_id = ObjectId(compra_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID de compra inválido")
+        
+        # Obtener la compra
+        compra = await compras_collection.find_one({"_id": compra_object_id})
+        if not compra:
+            raise HTTPException(status_code=404, detail="Compra no encontrada")
+        
+        # Validar que la compra no esté completamente pagada
+        estado_actual = compra.get("estado", "sin_pago")
+        if estado_actual == "pagada":
+            raise HTTPException(status_code=400, detail="La compra ya está completamente pagada")
+        
+        # Validar datos del pago
+        monto = float(pago_data.get("monto", 0))
+        if monto <= 0:
+            raise HTTPException(status_code=400, detail="El monto debe ser mayor a 0")
+        
+        metodo_pago = pago_data.get("metodo_pago", "")
+        banco_id = pago_data.get("banco_id")
+        fecha_pago = pago_data.get("fecha_pago", datetime.now().strftime("%Y-%m-%d"))
+        referencia = pago_data.get("referencia", "")
+        notas = pago_data.get("notas", "")
+        comprobante = pago_data.get("comprobante", "")  # Nombre del archivo del comprobante
+        
+        # Calcular montos actuales
+        total_factura = float(compra.get("total", 0))
+        pagos_existentes = compra.get("pagos", [])
+        monto_abonado_actual = sum(float(p.get("monto", 0)) for p in pagos_existentes)
+        monto_restante_actual = total_factura - monto_abonado_actual
+        
+        # Validar que el monto no exceda el monto restante
+        if monto > monto_restante_actual:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El monto del pago ({monto}) excede el monto restante ({monto_restante_actual})"
+            )
+        
+        # Si el método de pago es banco, validar y actualizar el banco
+        if metodo_pago == "banco" and banco_id:
+            try:
+                banco_object_id = ObjectId(banco_id)
+            except InvalidId:
+                raise HTTPException(status_code=400, detail="ID de banco inválido")
+            
+            banco = await bancos_collection.find_one({"_id": banco_object_id})
+            if not banco:
+                raise HTTPException(status_code=404, detail="Banco no encontrado")
+            
+            # Validar que el banco tenga saldo suficiente
+            saldo_actual = float(banco.get("saldo", 0))
+            if saldo_actual < monto:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El banco no tiene saldo suficiente. Saldo disponible: {saldo_actual}, Monto requerido: {monto}"
+                )
+            
+            # Actualizar saldo del banco (restar porque es un pago saliente)
+            nuevo_saldo = saldo_actual - monto
+            await bancos_collection.update_one(
+                {"_id": banco_object_id},
+                {"$set": {"saldo": nuevo_saldo}}
+            )
+            
+            # Crear movimiento en el historial del banco
+            movimientos = banco.get("movimientos", [])
+            nuevo_movimiento = {
+                "tipo": "pago_compra",
+                "monto": monto,
+                "fecha": fecha_pago,
+                "referencia": referencia,
+                "compra_id": compra_id,
+                "notas": notas,
+                "usuario": usuario_actual.get("correo", "unknown"),
+                "fechaCreacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            movimientos.append(nuevo_movimiento)
+            
+            await bancos_collection.update_one(
+                {"_id": banco_object_id},
+                {"$set": {"movimientos": movimientos}}
+            )
+            
+            print(f"🏦 [COMPRAS] Saldo del banco actualizado: {saldo_actual} -> {nuevo_saldo}")
+        
+        # Crear el pago
+        nuevo_pago = {
+            "monto": monto,
+            "fecha_pago": fecha_pago,
+            "metodo_pago": metodo_pago,
+            "referencia": referencia,
+            "notas": notas,
+            "comprobante": comprobante,  # Guardar nombre del archivo
+            "usuarioCreacion": usuario_actual.get("correo", "unknown"),
+            "fechaCreacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        if banco_id:
+            nuevo_pago["banco_id"] = ObjectId(banco_id)
+        
+        # Agregar el pago a la compra
+        if "pagos" not in compra:
+            compra["pagos"] = []
+        
+        compra["pagos"].append(nuevo_pago)
+        
+        # Calcular nuevos montos
+        monto_abonado_nuevo = monto_abonado_actual + monto
+        monto_restante_nuevo = total_factura - monto_abonado_nuevo
+        
+        # Determinar nuevo estado
+        if monto_restante_nuevo <= 0:
+            nuevo_estado = "pagada"
+        elif monto_abonado_nuevo > 0:
+            nuevo_estado = "abonado"
+        else:
+            nuevo_estado = "sin_pago"
+        
+        # Actualizar la compra
+        await compras_collection.update_one(
+            {"_id": compra_object_id},
+            {
+                "$set": {
+                    "pagos": compra["pagos"],
+                    "monto_abonado": monto_abonado_nuevo,
+                    "monto_restante": monto_restante_nuevo,
+                    "estado": nuevo_estado,
+                    "fechaActualizacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "usuarioActualizacion": usuario_actual.get("correo", "unknown")
+                }
+            }
+        )
+        
+        # Obtener la compra actualizada
+        compra_actualizada = await compras_collection.find_one({"_id": compra_object_id})
+        compra_actualizada["_id"] = str(compra_actualizada["_id"])
+        
+        # Convertir ObjectIds en pagos
+        for pago in compra_actualizada.get("pagos", []):
+            if "_id" in pago and isinstance(pago["_id"], ObjectId):
+                pago["_id"] = str(pago["_id"])
+            if "banco_id" in pago and isinstance(pago["banco_id"], ObjectId):
+                pago["banco_id"] = str(pago["banco_id"])
+        
+        print(f"✅ [COMPRAS] Pago creado: {monto} - Estado: {nuevo_estado}")
+        
+        return {
+            "message": "Pago creado exitosamente",
+            "pago": nuevo_pago,
+            "compra": compra_actualizada
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [COMPRAS] Error creando pago: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/compras/{compra_id}")

@@ -1070,6 +1070,29 @@ async def actualizar_item_inventario(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/bancos")
+async def obtener_bancos(usuario: dict = Depends(get_current_user)):
+    """
+    Obtiene todos los bancos disponibles.
+    Requiere autenticación.
+    """
+    try:
+        print(f"🏦 [BANCOS] Obteniendo bancos")
+        collection = get_collection("BANCOS")
+        bancos = await collection.find({}).to_list(length=None)
+        
+        # Convertir _id a string
+        for banco in bancos:
+            banco["_id"] = str(banco["_id"])
+        
+        print(f"🏦 [BANCOS] Encontrados {len(bancos)} bancos")
+        return bancos
+    except Exception as e:
+        print(f"❌ [BANCOS] Error obteniendo bancos: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/presigned-url")
 async def get_presigned_url(request: Request):
     """

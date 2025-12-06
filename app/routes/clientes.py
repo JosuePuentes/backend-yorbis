@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Any
 from bson import ObjectId
 from bson.errors import InvalidId
 from datetime import datetime
+import re
 
 router = APIRouter()
 
@@ -78,6 +79,56 @@ async def obtener_clientes(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/clientes/buscar")
+async def buscar_clientes(
+    q: str = Query(..., description="Término de búsqueda"),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Busca clientes por nombre, cédula, teléfono o email.
+    Búsqueda case-insensitive y coincidencia parcial.
+    Requiere autenticación.
+    """
+    try:
+        print(f"🔍 [CLIENTES] Búsqueda: '{q}'")
+        
+        clientes_collection = get_collection("CLIENTES")
+        
+        if not q or not q.strip():
+            return []
+        
+        query_term = q.strip()
+        # Escapar caracteres especiales de regex
+        escaped_query = re.escape(query_term)
+        # Crear regex para búsqueda case-insensitive
+        regex_pattern = re.compile(escaped_query, re.IGNORECASE)
+        
+        # Buscar en múltiples campos
+        filtro = {
+            "$or": [
+                {"nombre": regex_pattern},
+                {"cedula": regex_pattern},
+                {"telefono": regex_pattern},
+                {"email": regex_pattern},
+                {"direccion": regex_pattern}
+            ]
+        }
+        
+        clientes = await clientes_collection.find(filtro).to_list(length=50)  # Limitar a 50 resultados
+        
+        # Convertir _id a string
+        for cliente in clientes:
+            cliente["_id"] = str(cliente["_id"])
+        
+        print(f"🔍 [CLIENTES] Encontrados {len(clientes)} clientes")
+        return clientes
+        
+    except Exception as e:
+        print(f"❌ [CLIENTES] Error buscando clientes: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/clientes/{cliente_id}")
 async def obtener_cliente(
     cliente_id: str,
@@ -88,6 +139,10 @@ async def obtener_cliente(
     Requiere autenticación.
     """
     try:
+        # Si el cliente_id es "buscar", no intentar convertirlo a ObjectId
+        if cliente_id == "buscar":
+            raise HTTPException(status_code=404, detail="Use GET /clientes/buscar?q=termino para buscar")
+        
         try:
             object_id = ObjectId(cliente_id)
         except InvalidId:
