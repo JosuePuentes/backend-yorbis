@@ -1138,6 +1138,203 @@ async def crear_banco(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/bancos/movimientos")
+async def crear_movimiento_banco(
+    movimiento_data: dict = Body(...),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Crea un movimiento bancario (depósito, retiro, transferencia, etc.).
+    Actualiza el saldo del banco y agrega el movimiento al historial.
+    Requiere autenticación.
+    """
+    try:
+        print(f"💸 [BANCOS] Creando movimiento - Usuario: {usuario.get('correo', 'unknown')}")
+        
+        bancos_collection = get_collection("BANCOS")
+        
+        # Validar campos requeridos
+        banco_id = movimiento_data.get("banco_id")
+        if not banco_id:
+            raise HTTPException(status_code=400, detail="El campo 'banco_id' es requerido")
+        
+        tipo = movimiento_data.get("tipo", "").lower()
+        if not tipo:
+            raise HTTPException(status_code=400, detail="El campo 'tipo' es requerido")
+        
+        monto = float(movimiento_data.get("monto", 0))
+        if monto <= 0:
+            raise HTTPException(status_code=400, detail="El monto debe ser mayor a 0")
+        
+        # Validar banco_id
+        try:
+            banco_object_id = ObjectId(banco_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID de banco inválido")
+        
+        # Obtener el banco
+        banco = await bancos_collection.find_one({"_id": banco_object_id})
+        if not banco:
+            raise HTTPException(status_code=404, detail="Banco no encontrado")
+        
+        saldo_actual = float(banco.get("saldo", 0))
+        
+        # Determinar si es entrada o salida de dinero
+        tipos_entrada = ["deposito", "ingreso", "transferencia_entrada", "abono", "pago_recibido"]
+        tipos_salida = ["retiro", "egreso", "transferencia_salida", "pago", "pago_compra", "gasto"]
+        
+        es_entrada = tipo in tipos_entrada
+        es_salida = tipo in tipos_salida
+        
+        if not es_entrada and not es_salida:
+            # Si no está en ninguna lista, asumir que es salida por defecto
+            es_salida = True
+        
+        # Calcular nuevo saldo
+        if es_entrada:
+            nuevo_saldo = saldo_actual + monto
+        else:  # es_salida
+            # Validar que haya saldo suficiente para retiros
+            if saldo_actual < monto:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Saldo insuficiente. Saldo disponible: {saldo_actual}, Monto requerido: {monto}"
+                )
+            nuevo_saldo = saldo_actual - monto
+        
+        # Crear el movimiento
+        movimiento = {
+            "tipo": tipo,
+            "monto": monto,
+            "fecha": movimiento_data.get("fecha", datetime.now().strftime("%Y-%m-%d")),
+            "referencia": movimiento_data.get("referencia", ""),
+            "descripcion": movimiento_data.get("descripcion", ""),
+            "notas": movimiento_data.get("notas", ""),
+            "usuario": usuario.get("correo", "unknown"),
+            "fechaCreacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "saldo_anterior": saldo_actual,
+            "saldo_nuevo": nuevo_saldo
+        }
+        
+        # Agregar campos opcionales
+        if movimiento_data.get("comprobante"):
+            movimiento["comprobante"] = movimiento_data.get("comprobante")
+        
+        if movimiento_data.get("compra_id"):
+            movimiento["compra_id"] = movimiento_data.get("compra_id")
+        
+        if movimiento_data.get("cliente_id"):
+            movimiento["cliente_id"] = movimiento_data.get("cliente_id")
+        
+        # Obtener movimientos existentes
+        movimientos = banco.get("movimientos", [])
+        movimientos.append(movimiento)
+        
+        # Actualizar el banco
+        await bancos_collection.update_one(
+            {"_id": banco_object_id},
+            {
+                "$set": {
+                    "saldo": nuevo_saldo,
+                    "movimientos": movimientos,
+                    "fechaActualizacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "usuarioActualizacion": usuario.get("correo", "unknown")
+                }
+            }
+        )
+        
+        # Obtener el banco actualizado
+        banco_actualizado = await bancos_collection.find_one({"_id": banco_object_id})
+        banco_actualizado["_id"] = str(banco_actualizado["_id"])
+        
+        # Convertir ObjectIds en movimientos
+        for mov in banco_actualizado.get("movimientos", []):
+            if "compra_id" in mov and isinstance(mov["compra_id"], ObjectId):
+                mov["compra_id"] = str(mov["compra_id"])
+            if "cliente_id" in mov and isinstance(mov["cliente_id"], ObjectId):
+                mov["cliente_id"] = str(mov["cliente_id"])
+        
+        print(f"✅ [BANCOS] Movimiento creado: {tipo} - {monto} - Saldo: {saldo_actual} -> {nuevo_saldo}")
+        
+        return {
+            "message": "Movimiento creado exitosamente",
+            "movimiento": movimiento,
+            "banco": banco_actualizado
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [BANCOS] Error creando movimiento: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/bancos/{banco_id}/movimientos")
+async def obtener_movimientos_banco(
+    banco_id: str,
+    fecha_inicio: Optional[str] = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
+    fecha_fin: Optional[str] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Obtiene el historial de movimientos de un banco.
+    Puede filtrar por rango de fechas.
+    Requiere autenticación.
+    """
+    try:
+        try:
+            banco_object_id = ObjectId(banco_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID de banco inválido")
+        
+        bancos_collection = get_collection("BANCOS")
+        banco = await bancos_collection.find_one({"_id": banco_object_id})
+        
+        if not banco:
+            raise HTTPException(status_code=404, detail="Banco no encontrado")
+        
+        movimientos = banco.get("movimientos", [])
+        
+        # Filtrar por fecha si se especifica
+        if fecha_inicio or fecha_fin:
+            movimientos_filtrados = []
+            for mov in movimientos:
+                fecha_mov = mov.get("fecha", "")
+                if fecha_inicio and fecha_fin:
+                    if fecha_inicio <= fecha_mov <= fecha_fin:
+                        movimientos_filtrados.append(mov)
+                elif fecha_inicio:
+                    if fecha_mov >= fecha_inicio:
+                        movimientos_filtrados.append(mov)
+                elif fecha_fin:
+                    if fecha_mov <= fecha_fin:
+                        movimientos_filtrados.append(mov)
+            movimientos = movimientos_filtrados
+        
+        # Ordenar por fecha más reciente primero
+        movimientos.sort(key=lambda x: x.get("fechaCreacion", ""), reverse=True)
+        
+        # Convertir ObjectIds a strings
+        for mov in movimientos:
+            if "compra_id" in mov and isinstance(mov["compra_id"], ObjectId):
+                mov["compra_id"] = str(mov["compra_id"])
+            if "cliente_id" in mov and isinstance(mov["cliente_id"], ObjectId):
+                mov["cliente_id"] = str(mov["cliente_id"])
+        
+        return {
+            "banco_id": banco_id,
+            "banco_nombre": banco.get("nombre", ""),
+            "saldo_actual": banco.get("saldo", 0),
+            "total_movimientos": len(movimientos),
+            "movimientos": movimientos
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/presigned-url")
 async def get_presigned_url(request: Request):
     """
