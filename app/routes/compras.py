@@ -50,6 +50,7 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
         precio_total = float(producto_data.get("precioTotal", 0))
         codigo = producto_data.get("codigo")
         producto_id = producto_data.get("productoId")
+        marca = producto_data.get("marca") or producto_data.get("marca_producto") or ""
         
         # Obtener precio_venta si existe, sino usar precio_unitario como fallback
         precio_venta = producto_data.get("precio_venta")
@@ -121,6 +122,10 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
                 "usuarioActualizacion": usuario_correo
             }
             
+            # Actualizar marca si viene en el producto
+            if marca:
+                update_data["marca"] = marca
+            
             await inventarios_collection.update_one(
                 {"_id": inventario_existente["_id"]},
                 {"$set": update_data}
@@ -159,6 +164,9 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
             
             if producto_id:
                 nuevo_inventario["productoId"] = producto_id
+            
+            if marca:
+                nuevo_inventario["marca"] = marca
             
             await inventarios_collection.insert_one(nuevo_inventario)
             print(f"✅ Nuevo producto agregado al inventario: {nombre} - Cantidad: {cantidad}, Costo: {precio_unitario}, Utilidad: {utilidad_unitaria}, Precio venta: {precio_venta_final}")

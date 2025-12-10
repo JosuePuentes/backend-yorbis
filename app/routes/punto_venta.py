@@ -83,7 +83,7 @@ async def buscar_productos_punto_venta(
                     "_id": 1, "codigo": 1, "nombre": 1,
                     "precio_venta": 1, "precio": 1, "cantidad": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
-                    "farmacia": 1, "estado": 1
+                    "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
                 }
             )
             
@@ -118,7 +118,8 @@ async def buscar_productos_punto_venta(
                     "cantidad": float(cantidad),
                     "stock": float(cantidad),
                     "sucursal": producto_exacto.get("farmacia", sucursal or ""),
-                    "estado": producto_exacto.get("estado", "activo")
+                    "estado": producto_exacto.get("estado", "activo"),
+                    "marca": producto_exacto.get("marca") or producto_exacto.get("marca_producto") or ""
                 }
                 
                 # Agregar porcentaje de utilidad si existe
@@ -138,7 +139,7 @@ async def buscar_productos_punto_venta(
                     "_id": 1, "codigo": 1, "nombre": 1,
                     "precio_venta": 1, "precio": 1, "cantidad": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
-                    "farmacia": 1, "estado": 1
+                    "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
                 }
             ).sort("nombre", 1).limit(30).to_list(length=30)
         else:
@@ -179,7 +180,7 @@ async def buscar_productos_punto_venta(
                     "_id": 1, "codigo": 1, "nombre": 1, 
                     "precio_venta": 1, "precio": 1, "cantidad": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
-                    "farmacia": 1, "estado": 1
+                    "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
                 }
             ).sort("nombre", 1).limit(30).to_list(length=30)
         
@@ -216,7 +217,8 @@ async def buscar_productos_punto_venta(
                 "cantidad": float(cantidad),
                 "stock": float(cantidad),
                 "sucursal": producto.get("farmacia", sucursal or ""),
-                "estado": producto.get("estado", "activo")
+                "estado": producto.get("estado", "activo"),
+                "marca": producto.get("marca") or producto.get("marca_producto") or ""
             }
             
             # Agregar porcentaje de utilidad si existe o calcularlo
