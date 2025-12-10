@@ -51,151 +51,99 @@ async def buscar_productos_punto_venta(
             filtro["farmacia"] = sucursal.strip()
         
         query_term = q.strip() if q and q.strip() else ""
-        sucursal_value = sucursal.strip() if sucursal and sucursal.strip() else ""
         
-        # OPTIMIZACIÓN: Intentar búsqueda de texto directamente (sin consulta de prueba)
-        # Si falla, MongoDB lanzará excepción y usaremos regex
-        use_text_search = False
-        match_stage = {**filtro}
-        
+        # OPTIMIZACIÓN MÁXIMA: Búsqueda por código exacto primero (más rápida)
         if query_term:
-            # Intentar usar búsqueda de texto directamente (más rápido)
-            # Si no existe índice de texto, MongoDB lanzará excepción y usaremos regex
-            try:
-                match_stage["$text"] = {"$search": query_term}
-                use_text_search = True
-            except Exception:
-                # Si hay error al construir, usar regex directamente
-                use_text_search = False
-                escaped_query = re.escape(query_term)
-                # Optimización: usar regex más simple y eficiente
-                # Priorizar búsqueda exacta en código (más rápida)
-                regex_pattern = re.compile(escaped_query, re.IGNORECASE)
-                
-                # Construir $or optimizado: primero código exacto, luego nombre, luego otros
-                match_stage["$or"] = [
-                    {"codigo": {"$regex": escaped_query, "$options": "i"}},  # Código (usa índice si existe)
-                    {"nombre": {"$regex": escaped_query, "$options": "i"}},  # Nombre (usa índice si existe)
-                    {"descripcion": {"$regex": escaped_query, "$options": "i"}},
-                    {"marca": {"$regex": escaped_query, "$options": "i"}}
-                ]
-        
-        # Pipeline optimizado - menos etapas, más eficiente
-        pipeline = [{"$match": match_stage}]
-        
-        # Project simplificado - solo campos necesarios
-        project_fields = {
-            "id": {"$toString": "$_id"},
-            "codigo": 1,
-            "nombre": 1,
-            "descripcion": {"$ifNull": ["$descripcion", "$nombre"]},
-            "precio": {"$ifNull": ["$precio_venta", {"$ifNull": ["$precio", 0]}]},
-            "marca": 1,
-            "cantidad": {"$ifNull": ["$cantidad", 0]},
-            "lotes": {"$ifNull": ["$lotes", []]},
-            "farmacia": 1,
-            "costo": {"$ifNull": ["$costo", 0]},
-            "estado": 1,
-            "productoId": {
-                "$cond": {
-                    "if": {"$ne": ["$productoId", None]},
-                    "then": {"$toString": "$productoId"},
-                    "else": None
-                }
-            }
-        }
-        
-        if use_text_search:
-            project_fields["score"] = {"$meta": "textScore"}
-        
-        pipeline.append({"$project": project_fields})
-        
-        # Agregar campos calculados
-        add_fields_stage = {
-            "stock": "$cantidad",
-            "precio_venta": "$precio"
-        }
-        
-        # Agregar sucursal usando $literal para valores de Python
-        if sucursal_value:
-            add_fields_stage["sucursal"] = {
-                "$cond": {
-                    "if": {"$ne": ["$farmacia", None]},
-                    "then": "$farmacia",
-                    "else": {"$literal": sucursal_value}
-                }
-            }
-        else:
-            add_fields_stage["sucursal"] = {"$ifNull": ["$farmacia", ""]}
-        
-        pipeline.append({"$addFields": add_fields_stage})
-        
-        # Sort y limit
-        if use_text_search:
-            pipeline.append({"$sort": {"score": {"$meta": "textScore"}}})
-        else:
-            pipeline.append({"$sort": {"nombre": 1}})
-        
-        pipeline.append({"$limit": 50})  # Reducir a 50 para mejor rendimiento
-        
-        # Ejecutar agregación
-        try:
-            productos_cursor = inventarios_collection.aggregate(pipeline)
-            resultados = await productos_cursor.to_list(length=50)
-        except Exception as agg_error:
-            # Si falla la agregación (ej: no hay índice de texto), usar búsqueda simple
-            if use_text_search and "text index" in str(agg_error).lower():
-                # Fallback a búsqueda regex
-                use_text_search = False
-                escaped_query = re.escape(query_term)
-                match_stage = {**filtro, "$or": [
-                    {"codigo": {"$regex": escaped_query, "$options": "i"}},
-                    {"nombre": {"$regex": escaped_query, "$options": "i"}},
-                    {"descripcion": {"$regex": escaped_query, "$options": "i"}},
-                    {"marca": {"$regex": escaped_query, "$options": "i"}}
-                ]}
-                
-                # Pipeline simplificado sin texto
-                fallback_add_fields = {
-                    "stock": "$cantidad",
-                    "precio_venta": "$precio"
-                }
-                if sucursal_value:
-                    fallback_add_fields["sucursal"] = {
-                        "$cond": {
-                            "if": {"$ne": ["$farmacia", None]},
-                            "then": "$farmacia",
-                            "else": {"$literal": sucursal_value}
-                        }
-                    }
-                else:
-                    fallback_add_fields["sucursal"] = {"$ifNull": ["$farmacia", ""]}
-                
-                pipeline = [
-                    {"$match": match_stage},
-                    {"$project": project_fields},
-                    {"$addFields": fallback_add_fields},
-                    {"$sort": {"nombre": 1}},
-                    {"$limit": 50}
-                ]
-                productos_cursor = inventarios_collection.aggregate(pipeline)
-                resultados = await productos_cursor.to_list(length=50)
-            else:
-                raise
-        
-        # Formatear resultados finales (mínimo procesamiento)
-        for resultado in resultados:
-            # Convertir tipos y limpiar
-            resultado["precio"] = float(resultado.get("precio", 0))
-            resultado["cantidad"] = float(resultado.get("cantidad", 0))
-            resultado["stock"] = float(resultado.get("stock", 0))
-            resultado["costo"] = float(resultado.get("costo", 0))
+            # 1. Intentar búsqueda exacta por código (MUY RÁPIDA con índice)
+            codigo_filtro = {**filtro, "codigo": query_term.upper()}
+            producto_exacto = await inventarios_collection.find_one(codigo_filtro)
             
-            # Remover campos None opcionales
-            if resultado.get("marca") is None:
-                resultado.pop("marca", None)
-            if resultado.get("productoId") is None:
-                resultado.pop("productoId", None)
+            if producto_exacto:
+                # Si encontramos coincidencia exacta, retornar solo ese resultado
+                resultado = {
+                    "id": str(producto_exacto["_id"]),
+                    "codigo": producto_exacto.get("codigo", ""),
+                    "nombre": producto_exacto.get("nombre", ""),
+                    "descripcion": producto_exacto.get("descripcion") or producto_exacto.get("nombre", ""),
+                    "precio": float(producto_exacto.get("precio_venta") or producto_exacto.get("precio", 0)),
+                    "marca": producto_exacto.get("marca"),
+                    "cantidad": float(producto_exacto.get("cantidad", 0)),
+                    "stock": float(producto_exacto.get("cantidad", 0)),
+                    "lotes": producto_exacto.get("lotes", []),
+                    "sucursal": producto_exacto.get("farmacia", sucursal or ""),
+                    "costo": float(producto_exacto.get("costo", 0)),
+                    "estado": producto_exacto.get("estado", "activo"),
+                    "precio_venta": float(producto_exacto.get("precio_venta") or producto_exacto.get("precio", 0))
+                }
+                if producto_exacto.get("productoId"):
+                    resultado["productoId"] = str(producto_exacto["productoId"])
+                # Limpiar None
+                resultado = {k: v for k, v in resultado.items() if v is not None or k in ["id", "codigo", "nombre", "descripcion", "precio"]}
+                return [resultado]
+        
+        # 2. Si no hay coincidencia exacta, usar búsqueda optimizada
+        if not query_term:
+            # Sin término de búsqueda, retornar productos de la sucursal
+            productos = await inventarios_collection.find(
+                filtro,
+                projection={
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                }
+            ).sort("nombre", 1).limit(50).to_list(length=50)
+        else:
+            # Búsqueda con término - usar find() con regex (más rápido que aggregate para casos simples)
+            escaped_query = re.escape(query_term)
+            
+            # Construir $or optimizado - priorizar código y nombre (campos indexados)
+            match_stage = {
+                **filtro,
+                "$or": [
+                    {"codigo": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio
+                    {"nombre": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio
+                    {"codigo": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial
+                    {"nombre": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial
+                    {"descripcion": {"$regex": escaped_query, "$options": "i"}},
+                    {"marca": {"$regex": escaped_query, "$options": "i"}}
+                ]
+            }
+            
+            # Usar find() con proyección (más rápido que aggregate para búsquedas simples)
+            productos = await inventarios_collection.find(
+                match_stage,
+                projection={
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                }
+            ).sort("nombre", 1).limit(50).to_list(length=50)
+        
+        # Formatear resultados (procesamiento mínimo)
+        resultados = []
+        for producto in productos:
+            resultado = {
+                "id": str(producto["_id"]),
+                "codigo": producto.get("codigo", ""),
+                "nombre": producto.get("nombre", ""),
+                "descripcion": producto.get("descripcion") or producto.get("nombre", ""),
+                "precio": float(producto.get("precio_venta") or producto.get("precio", 0)),
+                "cantidad": float(producto.get("cantidad", 0)),
+                "stock": float(producto.get("cantidad", 0)),
+                "lotes": producto.get("lotes", []),
+                "sucursal": producto.get("farmacia", sucursal or ""),
+                "costo": float(producto.get("costo", 0)),
+                "estado": producto.get("estado", "activo"),
+                "precio_venta": float(producto.get("precio_venta") or producto.get("precio", 0))
+            }
+            
+            # Campos opcionales
+            if producto.get("marca"):
+                resultado["marca"] = producto["marca"]
+            if producto.get("productoId"):
+                resultado["productoId"] = str(producto["productoId"])
+            
+            resultados.append(resultado)
         
         return resultados
         

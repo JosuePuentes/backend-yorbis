@@ -188,3 +188,4 @@ async def grant_all_permissions():
 if __name__ == "__main__":
     asyncio.run(grant_all_permissions())
 
+

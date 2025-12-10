@@ -52,3 +52,4 @@ Si obtienes un 404:
 3. Revisa los logs en Render para ver errores específicos
 4. Asegúrate de que todos los archivos `__init__.py` estén presentes
 
+

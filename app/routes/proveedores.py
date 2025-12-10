@@ -162,3 +162,4 @@ async def eliminar_proveedor(proveedor_id: str, usuario_actual: dict = Depends(g
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+

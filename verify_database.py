@@ -69,3 +69,4 @@ async def verify_and_create_db():
 if __name__ == "__main__":
     asyncio.run(verify_and_create_db())
 
+

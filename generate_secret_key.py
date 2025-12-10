@@ -14,3 +14,4 @@ print("=" * 60)
 print("\n📋 Copia este valor y úsalo como SECRET_KEY en tus variables de entorno")
 print("=" * 60)
 
+

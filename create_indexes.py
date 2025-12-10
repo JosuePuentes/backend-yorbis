@@ -3,9 +3,21 @@ Script para crear índices optimizados para el punto de venta
 Esto mejorará significativamente el rendimiento de las búsquedas de productos
 """
 import asyncio
+import os
 from motor.motor_asyncio import AsyncIOMotorClient
-from app.core.config import MONGO_URI, DATABASE_NAME
+from dotenv import load_dotenv
 import certifi
+
+# Cargar variables de entorno
+load_dotenv()
+
+# Obtener variables de entorno directamente (sin depender de config.py)
+MONGO_URI = os.getenv("MONGO_URI")
+DATABASE_NAME = os.getenv("DATABASE_NAME") or "ferreteria_los_puentes"
+
+# Validar que MONGO_URI esté configurada
+if not MONGO_URI:
+    raise ValueError("MONGO_URI no está configurada. Por favor configura la variable de entorno MONGO_URI")
 
 async def create_indexes():
     """Crea índices optimizados para búsquedas de productos"""
@@ -75,4 +87,5 @@ async def create_indexes():
 
 if __name__ == "__main__":
     asyncio.run(create_indexes())
+
 

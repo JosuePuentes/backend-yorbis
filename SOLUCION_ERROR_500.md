@@ -73,3 +73,4 @@ He mejorado el código para:
 3. ✅ Prueba el login nuevamente
 4. ✅ Si persiste el error, revisa los logs en Render
 
+

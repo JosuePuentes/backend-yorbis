@@ -82,3 +82,4 @@ Cuando se crea una compra (`POST /compras`), los productos se suman AUTOMÁTICAM
 3. **Inventario Automático**: Solo al crear compra, NO al actualizar/eliminar
 4. **Farmacia**: Usar ID "01" para "Ferretería Los Puentes"
 
+

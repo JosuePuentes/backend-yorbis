@@ -46,3 +46,4 @@ Configura estas variables en tu plataforma de hosting (Vercel, Railway, Render, 
 
 - Las variables de R2 son opcionales si no usas almacenamiento de archivos.
 
+
