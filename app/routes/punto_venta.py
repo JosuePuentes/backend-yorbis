@@ -227,7 +227,35 @@ async def crear_venta(
         
         # Agregar información de creación
         venta_dict["usuarioCreacion"] = usuario_actual.get("correo", "unknown")
-        venta_dict["fechaCreacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fecha_actual = datetime.now()
+        venta_dict["fechaCreacion"] = fecha_actual.strftime("%Y-%m-%d %H:%M:%S")
+        fecha_venta = venta_dict.get("fecha", fecha_actual.strftime("%Y-%m-%d"))
+        farmacia = venta_dict.get("sucursal") or venta_dict.get("farmacia")
+        
+        if not farmacia:
+            raise HTTPException(status_code=400, detail="La venta debe tener una sucursal (sucursal o farmacia)")
+        
+        # DESCONTAR STOCK DEL INVENTARIO
+        productos = venta_dict.get("productos", [])
+        costo_inventario_total = 0.0
+        
+        if productos:
+            print(f"📦 [PUNTO_VENTA] Descontando stock de {len(productos)} productos...")
+            for producto_venta in productos:
+                producto_id = producto_venta.get("productoId") or producto_venta.get("id")
+                cantidad = float(producto_venta.get("cantidad", 0))
+                
+                if producto_id and cantidad > 0:
+                    try:
+                        costo = await descontar_stock_inventario(producto_id, cantidad, farmacia)
+                        costo_inventario_total += costo
+                    except Exception as e:
+                        print(f"⚠️ [PUNTO_VENTA] Error descontando stock de producto {producto_id}: {e}")
+                        # Continuar con otros productos pero registrar el error
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Error descontando stock: {str(e)}"
+                        )
         
         # Guardar en la base de datos
         ventas_collection = get_collection("VENTAS")
@@ -237,7 +265,31 @@ async def crear_venta(
         # Convertir _id a string en la respuesta
         venta_dict["_id"] = venta_id
         
-        print(f"✅ [PUNTO_VENTA] Venta creada: {venta_id} - Descuento por divisa: {descuento_por_divisa}%")
+        # ACTUALIZAR RESUMEN DE VENTAS (en segundo plano, no bloquea la respuesta)
+        try:
+            # Primero actualizar resumen con pagos
+            await actualizar_resumen_ventas(venta_dict, farmacia, fecha_venta)
+            
+            # Luego actualizar costo de inventario en el resumen
+            resumen_collection = get_collection("RESUMEN_VENTAS")
+            resumen = await resumen_collection.find_one({
+                "farmacia": farmacia,
+                "fecha": fecha_venta
+            })
+            
+            if resumen:
+                totales = resumen.get("totales", {})
+                costo_actual = float(totales.get("costo_inventario", 0))
+                totales["costo_inventario"] = costo_actual + costo_inventario_total
+                
+                await resumen_collection.update_one(
+                    {"_id": resumen["_id"]},
+                    {"$set": {"totales": totales}}
+                )
+        except Exception as e:
+            print(f"⚠️ [PUNTO_VENTA] Error actualizando resumen (no crítico): {e}")
+        
+        print(f"✅ [PUNTO_VENTA] Venta creada: {venta_id} - Descuento por divisa: {descuento_por_divisa}% - Costo inventario: {costo_inventario_total}")
         
         return {
             "message": "Venta creada exitosamente",
@@ -415,6 +467,303 @@ async def obtener_tasa_del_dia(
         
     except Exception as e:
         print(f"❌ [PUNTO_VENTA] Error obteniendo tasa del día: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# FUNCIONES AUXILIARES PARA VENTAS
+# ============================================================================
+
+async def descontar_stock_inventario(producto_id: str, cantidad_vendida: float, farmacia: str):
+    """
+    Descuenta stock del inventario usando FIFO para lotes.
+    Retorna el costo total descontado para calcular el costo de inventario.
+    """
+    try:
+        inventarios_collection = get_collection("INVENTARIOS")
+        
+        # Buscar el producto en el inventario
+        try:
+            producto_object_id = ObjectId(producto_id)
+        except InvalidId:
+            raise ValueError(f"ID de producto inválido: {producto_id}")
+        
+        producto = await inventarios_collection.find_one({
+            "_id": producto_object_id,
+            "farmacia": farmacia
+        })
+        
+        if not producto:
+            raise ValueError(f"Producto {producto_id} no encontrado en farmacia {farmacia}")
+        
+        cantidad_actual = float(producto.get("cantidad", 0))
+        if cantidad_actual < cantidad_vendida:
+            raise ValueError(f"Stock insuficiente. Disponible: {cantidad_actual}, Requerido: {cantidad_vendida}")
+        
+        # Manejar lotes con FIFO
+        lotes = producto.get("lotes", [])
+        cantidad_restante = cantidad_vendida
+        costo_total = 0.0
+        
+        if lotes and len(lotes) > 0:
+            # Ordenar lotes por fecha (FIFO: primero los más antiguos)
+            lotes_ordenados = sorted(lotes, key=lambda x: x.get("fecha_vencimiento", "9999-12-31"))
+            
+            # Descontar de lotes
+            lotes_actualizados = []
+            for lote in lotes_ordenados:
+                if cantidad_restante <= 0:
+                    lotes_actualizados.append(lote)
+                    continue
+                
+                cantidad_lote = float(lote.get("cantidad", 0))
+                costo_lote = float(lote.get("costo", 0))
+                
+                if cantidad_lote <= cantidad_restante:
+                    # Descontar todo el lote
+                    costo_total += cantidad_lote * costo_lote
+                    cantidad_restante -= cantidad_lote
+                    # No agregar el lote a lotes_actualizados (se agotó)
+                else:
+                    # Descontar parcialmente del lote
+                    costo_total += cantidad_restante * costo_lote
+                    lote["cantidad"] = cantidad_lote - cantidad_restante
+                    lotes_actualizados.append(lote)
+                    cantidad_restante = 0
+            
+            # Actualizar producto con lotes actualizados
+            nueva_cantidad = cantidad_actual - cantidad_vendida
+            await inventarios_collection.update_one(
+                {"_id": producto_object_id},
+                {
+                    "$set": {
+                        "cantidad": nueva_cantidad,
+                        "lotes": lotes_actualizados
+                    }
+                }
+            )
+        else:
+            # Sin lotes: usar costo promedio
+            costo_promedio = float(producto.get("costo", 0))
+            costo_total = cantidad_vendida * costo_promedio
+            nueva_cantidad = cantidad_actual - cantidad_vendida
+            
+            await inventarios_collection.update_one(
+                {"_id": producto_object_id},
+                {"$set": {"cantidad": nueva_cantidad}}
+            )
+        
+        print(f"📦 [INVENTARIO] Stock descontado: {producto_id} - {cantidad_vendida} unidades, Costo: {costo_total}")
+        return costo_total
+        
+    except Exception as e:
+        print(f"❌ [INVENTARIO] Error descontando stock: {e}")
+        raise
+
+async def obtener_tipo_metodo_banco(banco_id: str) -> str:
+    """
+    Obtiene el tipo_metodo del banco para determinar el método de pago real.
+    """
+    try:
+        if not banco_id:
+            return None
+        
+        bancos_collection = get_collection("BANCOS")
+        try:
+            banco_object_id = ObjectId(banco_id)
+        except InvalidId:
+            return None
+        
+        banco = await bancos_collection.find_one({"_id": banco_object_id})
+        if banco:
+            return banco.get("tipo_metodo") or banco.get("tipoMetodo")
+        return None
+    except Exception as e:
+        print(f"⚠️ [BANCOS] Error obteniendo tipo_metodo: {e}")
+        return None
+
+def mapear_tipo_pago(tipo: str, banco_id: Optional[str] = None, tipo_metodo: Optional[str] = None) -> str:
+    """
+    Mapea el tipo de pago al tipo correcto para el resumen.
+    Si tipo es "banco", usa tipo_metodo del banco.
+    """
+    tipo_lower = tipo.lower() if tipo else ""
+    
+    # Si es banco, usar tipo_metodo
+    if tipo_lower == "banco" and tipo_metodo:
+        tipo_metodo_lower = tipo_metodo.lower()
+        
+        # Mapeo de tipos de método de banco
+        if "zelle" in tipo_metodo_lower:
+            return "usd_zelle"
+        elif "efectivo" in tipo_metodo_lower or "cash" in tipo_metodo_lower:
+            return "usd_efectivo"
+        elif "punto" in tipo_metodo_lower and "debito" in tipo_metodo_lower:
+            return "punto_debito_bs"
+        elif "punto" in tipo_metodo_lower and "credito" in tipo_metodo_lower:
+            return "punto_credito_bs"
+        elif "pago" in tipo_metodo_lower and "movil" in tipo_metodo_lower:
+            return "pago_movil_bs"
+        elif "recarga" in tipo_metodo_lower:
+            return "recarga_bs"
+        else:
+            return "banco_bs"  # Fallback
+    
+    # Mapeo directo de tipos
+    mapeo = {
+        "usd_efectivo": "usd_efectivo",
+        "usd_zelle": "usd_zelle",
+        "vales_usd": "vales_usd",
+        "efectivo_bs": "efectivo_bs",
+        "pago_movil_bs": "pago_movil_bs",
+        "punto_debito_bs": "punto_debito_bs",
+        "punto_credito_bs": "punto_credito_bs",
+        "recarga_bs": "recarga_bs",
+        "devoluciones_bs": "devoluciones_bs"
+    }
+    
+    return mapeo.get(tipo_lower, tipo_lower)
+
+async def actualizar_resumen_ventas(venta_data: dict, farmacia: str, fecha: str):
+    """
+    Crea o actualiza el resumen de ventas por sucursal y día.
+    """
+    try:
+        resumen_collection = get_collection("RESUMEN_VENTAS")
+        
+        # Obtener pagos de la venta
+        pagos = venta_data.get("pagos", [])
+        if not pagos:
+            print("⚠️ [RESUMEN] Venta sin pagos, no se actualiza resumen")
+            return
+        
+        # Obtener tipo_metodo de bancos si es necesario
+        for pago in pagos:
+            if pago.get("tipo") == "banco" and pago.get("banco_id"):
+                tipo_metodo = await obtener_tipo_metodo_banco(pago.get("banco_id"))
+                pago["tipo_metodo_real"] = tipo_metodo
+        
+        # Buscar resumen existente
+        resumen_existente = await resumen_collection.find_one({
+            "farmacia": farmacia,
+            "fecha": fecha
+        })
+        
+        # Inicializar totales
+        totales = {
+            "usd_efectivo": 0.0,
+            "usd_zelle": 0.0,
+            "vales_usd": 0.0,
+            "efectivo_bs": 0.0,
+            "pago_movil_bs": 0.0,
+            "punto_debito_bs": 0.0,
+            "punto_credito_bs": 0.0,
+            "recarga_bs": 0.0,
+            "devoluciones_bs": 0.0,
+            "costo_inventario": 0.0,
+            "venta_neta": 0.0
+        }
+        
+        # Si existe resumen, cargar totales actuales
+        if resumen_existente:
+            totales = resumen_existente.get("totales", totales)
+        
+        # Procesar pagos de esta venta
+        for pago in pagos:
+            monto = float(pago.get("monto", 0))
+            tipo = pago.get("tipo", "")
+            tipo_metodo = pago.get("tipo_metodo_real")
+            
+            tipo_mapeado = mapear_tipo_pago(tipo, pago.get("banco_id"), tipo_metodo)
+            
+            # Acumular en el tipo correcto
+            if tipo_mapeado in totales:
+                totales[tipo_mapeado] += monto
+            else:
+                print(f"⚠️ [RESUMEN] Tipo de pago desconocido: {tipo_mapeado}")
+        
+        # Calcular costo de inventario (se calculará después de descontar stock)
+        # Calcular venta neta (total de ventas - devoluciones)
+        venta_neta = (
+            totales["usd_efectivo"] + totales["usd_zelle"] + totales["vales_usd"] +
+            totales["efectivo_bs"] + totales["pago_movil_bs"] + totales["punto_debito_bs"] +
+            totales["punto_credito_bs"] + totales["recarga_bs"] - totales["devoluciones_bs"]
+        )
+        totales["venta_neta"] = venta_neta
+        
+        # Crear o actualizar resumen
+        resumen = {
+            "farmacia": farmacia,
+            "fecha": fecha,
+            "totales": totales,
+            "fechaActualizacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        if resumen_existente:
+            await resumen_collection.update_one(
+                {"_id": resumen_existente["_id"]},
+                {"$set": resumen}
+            )
+            print(f"✅ [RESUMEN] Resumen actualizado: {farmacia} - {fecha}")
+        else:
+            resumen["fechaCreacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            await resumen_collection.insert_one(resumen)
+            print(f"✅ [RESUMEN] Resumen creado: {farmacia} - {fecha}")
+        
+    except Exception as e:
+        print(f"❌ [RESUMEN] Error actualizando resumen: {e}")
+        import traceback
+        traceback.print_exc()
+        # No lanzar excepción para no fallar la venta
+
+@router.get("/punto-venta/ventas/resumen")
+async def obtener_resumen_ventas(
+    sucursal: str = Query(..., description="ID de la sucursal (farmacia)"),
+    fecha: Optional[str] = Query(None, description="Fecha en formato YYYY-MM-DD (opcional, por defecto hoy)"),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Obtiene el resumen de ventas por sucursal y día.
+    Retorna los totales discriminados por tipo de pago.
+    """
+    try:
+        # Si no se especifica fecha, usar la fecha actual
+        if not fecha:
+            fecha = datetime.now().strftime("%Y-%m-%d")
+        
+        resumen_collection = get_collection("RESUMEN_VENTAS")
+        
+        resumen = await resumen_collection.find_one({
+            "farmacia": sucursal,
+            "fecha": fecha
+        })
+        
+        if resumen:
+            resumen["_id"] = str(resumen["_id"])
+            return resumen
+        else:
+            # Retornar resumen vacío si no existe
+            return {
+                "farmacia": sucursal,
+                "fecha": fecha,
+                "totales": {
+                    "usd_efectivo": 0.0,
+                    "usd_zelle": 0.0,
+                    "vales_usd": 0.0,
+                    "efectivo_bs": 0.0,
+                    "pago_movil_bs": 0.0,
+                    "punto_debito_bs": 0.0,
+                    "punto_credito_bs": 0.0,
+                    "recarga_bs": 0.0,
+                    "devoluciones_bs": 0.0,
+                    "costo_inventario": 0.0,
+                    "venta_neta": 0.0
+                }
+            }
+            
+    except Exception as e:
+        print(f"❌ [RESUMEN] Error obteniendo resumen: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

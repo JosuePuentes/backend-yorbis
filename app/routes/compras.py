@@ -747,7 +747,25 @@ async def crear_pago_compra(
         # Calcular montos actuales
         total_factura = float(compra.get("total", 0))
         pagos_existentes = compra.get("pagos", [])
-        monto_abonado_actual = sum(float(p.get("monto", 0)) for p in pagos_existentes)
+        
+        # Validar que pagos_existentes sea una lista
+        if not isinstance(pagos_existentes, list):
+            print(f"⚠️ [COMPRAS] pagos_existentes no es una lista, tipo: {type(pagos_existentes)}, valor: {pagos_existentes}")
+            pagos_existentes = []
+        
+        # Convertir ObjectIds en pagos existentes si es necesario
+        pagos_procesados = []
+        for p in pagos_existentes:
+            if isinstance(p, dict):
+                pago_procesado = p.copy()
+                # Convertir ObjectId a string si existe
+                if "banco_id" in pago_procesado and isinstance(pago_procesado["banco_id"], ObjectId):
+                    pago_procesado["banco_id"] = str(pago_procesado["banco_id"])
+                pagos_procesados.append(pago_procesado)
+            else:
+                print(f"⚠️ [COMPRAS] Pago no es un diccionario: {type(p)}, valor: {p}")
+        
+        monto_abonado_actual = sum(float(p.get("monto", 0)) for p in pagos_procesados)
         monto_restante_actual = total_factura - monto_abonado_actual
         
         # Validar que el monto no exceda el monto restante
@@ -820,7 +838,7 @@ async def crear_pago_compra(
             nuevo_pago["banco_id"] = ObjectId(banco_id)
         
         # Agregar el pago a la compra
-        if "pagos" not in compra:
+        if "pagos" not in compra or not isinstance(compra["pagos"], list):
             compra["pagos"] = []
         
         compra["pagos"].append(nuevo_pago)
@@ -854,20 +872,37 @@ async def crear_pago_compra(
         
         # Obtener la compra actualizada
         compra_actualizada = await compras_collection.find_one({"_id": compra_object_id})
-        compra_actualizada["_id"] = str(compra_actualizada["_id"])
         
-        # Convertir ObjectIds en pagos
-        for pago in compra_actualizada.get("pagos", []):
-            if "_id" in pago and isinstance(pago["_id"], ObjectId):
-                pago["_id"] = str(pago["_id"])
-            if "banco_id" in pago and isinstance(pago["banco_id"], ObjectId):
-                pago["banco_id"] = str(pago["banco_id"])
+        if compra_actualizada:
+            # Convertir _id a string
+            compra_actualizada["_id"] = str(compra_actualizada["_id"])
+            
+            # Convertir ObjectIds en pagos
+            pagos_compra = compra_actualizada.get("pagos", [])
+            if isinstance(pagos_compra, list):
+                for pago in pagos_compra:
+                    if isinstance(pago, dict):
+                        if "banco_id" in pago and isinstance(pago["banco_id"], ObjectId):
+                            pago["banco_id"] = str(pago["banco_id"])
+                        if "_id" in pago and isinstance(pago["_id"], ObjectId):
+                            pago["_id"] = str(pago["_id"])
+            
+            # Convertir banco_id en nuevo_pago a string para la respuesta
+            nuevo_pago_respuesta = nuevo_pago.copy()
+            if "banco_id" in nuevo_pago_respuesta and isinstance(nuevo_pago_respuesta["banco_id"], ObjectId):
+                nuevo_pago_respuesta["banco_id"] = str(nuevo_pago_respuesta["banco_id"])
+        else:
+            compra_actualizada = compra.copy()
+            compra_actualizada["_id"] = str(compra_actualizada["_id"])
+            nuevo_pago_respuesta = nuevo_pago.copy()
+            if "banco_id" in nuevo_pago_respuesta and isinstance(nuevo_pago_respuesta["banco_id"], ObjectId):
+                nuevo_pago_respuesta["banco_id"] = str(nuevo_pago_respuesta["banco_id"])
         
         print(f"✅ [COMPRAS] Pago creado: {monto} - Estado: {nuevo_estado}")
         
         return {
             "message": "Pago creado exitosamente",
-            "pago": nuevo_pago,
+            "pago": nuevo_pago_respuesta,
             "compra": compra_actualizada
         }
         
