@@ -1094,6 +1094,118 @@ async def eliminar_item_inventario(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+async def _actualizar_item_inventario_internal(
+    item_id: str,
+    data: dict,
+    id_clean: str,
+    usuario: dict
+):
+    """
+    Función interna para actualizar un item de inventario.
+    """
+    collection = get_collection("INVENTARIOS")
+    
+    # El item_id puede venir en formato "id_codigo" o solo "id"
+    item_id_real = item_id.split("_")[0] if "_" in item_id else item_id
+    
+    try:
+        item_object_id = ObjectId(item_id_real)
+    except (InvalidId, ValueError):
+        # Si no es ObjectId válido, intentar buscar por código
+        if "_" in item_id:
+            codigo = "_".join(item_id.split("_")[1:])
+            filtro = {"codigo": codigo}
+            if id_clean:
+                filtro["farmacia"] = id_clean
+        else:
+            filtro = {"codigo": item_id}
+            if id_clean:
+                filtro["farmacia"] = id_clean
+        
+        # Buscar el item
+        item = await collection.find_one(filtro)
+        if not item:
+            raise HTTPException(status_code=404, detail="Item de inventario no encontrado")
+        
+        item_object_id = item["_id"]
+    
+    # No permitir actualizar el _id
+    if "_id" in data:
+        del data["_id"]
+    
+    # Obtener el item actual para calcular utilidad si es necesario
+    item_actual = await collection.find_one({"_id": item_object_id})
+    if not item_actual:
+        raise HTTPException(status_code=404, detail="Item de inventario no encontrado")
+    
+    costo_actual = float(item_actual.get("costo", 0)) if item_actual else 0
+    precio_venta_actual = float(item_actual.get("precio_venta", 0)) if item_actual else 0
+    
+    # Si se actualiza el costo, recalcular precio_venta y utilidad con 40%
+    if "costo" in data:
+        nuevo_costo = float(data["costo"])
+        # Si no viene precio_venta explícito, calcular con 40% de utilidad
+        if "precio_venta" not in data or not data.get("precio_venta"):
+            data["precio_venta"] = nuevo_costo / 0.60
+            data["utilidad"] = round(data["precio_venta"] - nuevo_costo, 2)
+            data["porcentaje_utilidad"] = 40.0
+        else:
+            # Si viene precio_venta, calcular utilidad basada en ese precio
+            nuevo_precio_venta = float(data["precio_venta"])
+            data["utilidad"] = round(nuevo_precio_venta - nuevo_costo, 2)
+            if nuevo_costo > 0:
+                data["porcentaje_utilidad"] = round((data["utilidad"] / nuevo_costo) * 100, 2)
+            else:
+                data["porcentaje_utilidad"] = 0.0
+    
+    # Si solo se actualiza precio_venta (sin costo), recalcular utilidad
+    elif "precio_venta" in data and "costo" not in data:
+        nuevo_precio_venta = float(data["precio_venta"])
+        if costo_actual > 0:
+            data["utilidad"] = round(nuevo_precio_venta - costo_actual, 2)
+            data["porcentaje_utilidad"] = round((data["utilidad"] / costo_actual) * 100, 2)
+        else:
+            data["utilidad"] = 0.0
+            data["porcentaje_utilidad"] = 0.0
+    
+    # Si no se actualiza ni costo ni precio_venta, pero faltan campos de utilidad, calcularlos
+    elif "costo" not in data and "precio_venta" not in data:
+        if costo_actual > 0 and precio_venta_actual > 0:
+            # Recalcular utilidad con los valores actuales
+            utilidad_calculada = precio_venta_actual - costo_actual
+            porcentaje_calculado = (utilidad_calculada / costo_actual) * 100 if costo_actual > 0 else 0
+            data["utilidad"] = round(utilidad_calculada, 2)
+            data["porcentaje_utilidad"] = round(porcentaje_calculado, 2)
+        elif costo_actual > 0 and (not precio_venta_actual or precio_venta_actual == 0):
+            # Si hay costo pero no precio_venta, calcular con 40%
+            data["precio_venta"] = costo_actual / 0.60
+            data["utilidad"] = round(data["precio_venta"] - costo_actual, 2)
+            data["porcentaje_utilidad"] = 40.0
+    
+    # Agregar información de actualización
+    data["usuarioActualizacion"] = usuario.get("correo", "unknown")
+    data["fechaActualizacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    resultado = await collection.update_one(
+        {"_id": item_object_id},
+        {"$set": data}
+    )
+    
+    if resultado.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Item de inventario no encontrado o sin cambios")
+    
+    # Obtener el item actualizado
+    item_actualizado = await collection.find_one({"_id": item_object_id})
+    item_actualizado["_id"] = str(item_actualizado["_id"])
+    if "productoId" in item_actualizado and isinstance(item_actualizado["productoId"], ObjectId):
+        item_actualizado["productoId"] = str(item_actualizado["productoId"])
+    
+    print(f"✅ [INVENTARIOS] Item actualizado: {item_id_real}")
+    return {
+        "message": "Item de inventario actualizado exitosamente",
+        "item": item_actualizado
+    }
+
 @router.put("/inventarios/{id}/items/{item_id}")
 @router.patch("/inventarios/{id}/items/{item_id}")
 async def actualizar_item_inventario(
@@ -1111,6 +1223,40 @@ async def actualizar_item_inventario(
         # Manejar caso cuando id está vacío (doble barra //)
         id_clean = id.strip() if id else ""
         print(f"✏️ [INVENTARIOS] Actualizando item: {item_id} de inventario: '{id_clean}' (vacío: {not id_clean})")
+        
+        return await _actualizar_item_inventario_internal(item_id, data, id_clean, usuario)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error actualizando item: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/inventarios/items/{item_id}")
+@router.patch("/inventarios/items/{item_id}")
+async def actualizar_item_inventario_sin_id(
+    item_id: str,
+    data: dict = Body(...),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Actualiza un item de inventario sin especificar el ID de farmacia.
+    Ruta alternativa para cuando el frontend llama /inventarios//items/{item_id}
+    """
+    try:
+        print(f"✏️ [INVENTARIOS] Actualizando item: {item_id} (sin ID de farmacia)")
+        
+        return await _actualizar_item_inventario_internal(item_id, data, "", usuario)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error actualizando item: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
         collection = get_collection("INVENTARIOS")
         
         # El item_id puede venir en formato "id_codigo" o solo "id"
