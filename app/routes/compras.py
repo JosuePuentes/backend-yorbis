@@ -97,23 +97,29 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
             else:
                 costo_promedio = precio_unitario
             
+            # Calcular precio_venta con 40% de utilidad si no viene explícito
+            if precio_venta and precio_venta > 0:
+                # Si viene precio_venta explícito, usarlo
+                precio_venta_final = precio_venta
+            else:
+                # Calcular automáticamente con 40% de utilidad
+                # Fórmula: precio_venta = costo / (1 - 0.40) = costo / 0.60
+                precio_venta_final = costo_promedio / 0.60
+            
+            # Calcular utilidad
+            utilidad_unitaria = precio_venta_final - costo_promedio
+            porcentaje_utilidad = 40.0  # Fijo al 40%
+            
             # Actualizar inventario
-            # Solo actualizar precio_venta si no existe o si viene en la compra
             update_data = {
                 "cantidad": cantidad_nueva,
                 "costo": costo_promedio,
+                "precio_venta": precio_venta_final,
+                "utilidad": round(utilidad_unitaria, 2),
+                "porcentaje_utilidad": porcentaje_utilidad,
                 "fechaActualizacion": fecha_actual,
                 "usuarioActualizacion": usuario_correo
             }
-            
-            # Si el producto de la compra tiene precio_venta, actualizarlo
-            # Si el inventario no tiene precio_venta, establecerlo
-            if precio_venta and precio_venta > 0:
-                if "precio_venta" not in inventario_existente or inventario_existente.get("precio_venta") == 0:
-                    update_data["precio_venta"] = precio_venta
-                # Opcional: también actualizar si viene explícitamente en la compra
-                # (descomentar si quieres que siempre se actualice)
-                # update_data["precio_venta"] = precio_venta
             
             await inventarios_collection.update_one(
                 {"_id": inventario_existente["_id"]},
@@ -122,19 +128,31 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
             print(f"✅ Inventario actualizado: {nombre} - Cantidad: {cantidad_actual} + {cantidad} = {cantidad_nueva}, Precio venta: {precio_venta}")
         else:
             # Producto no existe: crear nuevo registro de inventario
+            # Calcular precio_venta con 40% de utilidad si no viene explícito
+            if precio_venta and precio_venta > 0:
+                # Si viene precio_venta explícito, usarlo
+                precio_venta_final = precio_venta
+            else:
+                # Calcular automáticamente con 40% de utilidad
+                # Fórmula: precio_venta = costo / (1 - 0.40) = costo / 0.60
+                precio_venta_final = precio_unitario / 0.60
+            
+            # Calcular utilidad
+            utilidad_unitaria = precio_venta_final - precio_unitario
+            porcentaje_utilidad = 40.0  # Fijo al 40%
+            
             nuevo_inventario = {
                 "farmacia": farmacia,
                 "nombre": nombre,
                 "cantidad": cantidad,
                 "costo": precio_unitario,
+                "precio_venta": precio_venta_final,
+                "utilidad": round(utilidad_unitaria, 2),
+                "porcentaje_utilidad": porcentaje_utilidad,
                 "usuarioCorreo": usuario_correo,
                 "fecha": fecha_actual,
                 "estado": "activo"
             }
-            
-            # Agregar precio_venta si está disponible
-            if precio_venta and precio_venta > 0:
-                nuevo_inventario["precio_venta"] = precio_venta
             
             if codigo:
                 nuevo_inventario["codigo"] = codigo
@@ -143,7 +161,7 @@ async def actualizar_inventario(producto_data: dict, farmacia: str, usuario_corr
                 nuevo_inventario["productoId"] = producto_id
             
             await inventarios_collection.insert_one(nuevo_inventario)
-            print(f"✅ Nuevo producto agregado al inventario: {nombre} - Cantidad: {cantidad}, Precio venta: {precio_venta}")
+            print(f"✅ Nuevo producto agregado al inventario: {nombre} - Cantidad: {cantidad}, Costo: {precio_unitario}, Utilidad: {utilidad_unitaria}, Precio venta: {precio_venta_final}")
         
         return True
     except Exception as e:

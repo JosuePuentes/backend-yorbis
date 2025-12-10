@@ -833,7 +833,8 @@ async def listar_inventarios(
                 "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                 "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
                 "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                "productoId": 1, "categoria": 1, "proveedor": 1
+                "productoId": 1, "categoria": 1, "proveedor": 1,
+                "utilidad": 1, "porcentaje_utilidad": 1
             }
         ).sort("nombre", 1).limit(limit).to_list(length=limit)
         
@@ -841,6 +842,22 @@ async def listar_inventarios(
             inv["_id"] = str(inv["_id"])
             if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
                 inv["productoId"] = str(inv["productoId"])
+            
+            # Calcular utilidad si no existe
+            costo = float(inv.get("costo", 0))
+            precio_venta = float(inv.get("precio_venta", 0))
+            
+            if costo > 0:
+                if not precio_venta or precio_venta == 0:
+                    precio_venta = costo / 0.60
+                    inv["precio_venta"] = round(precio_venta, 2)
+                
+                if "utilidad" not in inv or not inv.get("utilidad"):
+                    utilidad = precio_venta - costo
+                    inv["utilidad"] = round(utilidad, 2)
+                    inv["porcentaje_utilidad"] = 40.0
+                elif "porcentaje_utilidad" not in inv:
+                    inv["porcentaje_utilidad"] = 40.0
         
         return inventarios
     except Exception as e:
@@ -884,13 +901,31 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
                     "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                     "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
                     "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                    "productoId": 1, "categoria": 1, "proveedor": 1
+                    "productoId": 1, "categoria": 1, "proveedor": 1,
+                    "utilidad": 1, "porcentaje_utilidad": 1
                 }
             ).sort("nombre", 1).limit(500).to_list(length=500)
             for inv in inventarios:
                 inv["_id"] = str(inv["_id"])
                 if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
                     inv["productoId"] = str(inv["productoId"])
+                
+                # Calcular utilidad si no existe
+                costo = float(inv.get("costo", 0))
+                precio_venta = float(inv.get("precio_venta", 0))
+                
+                if costo > 0:
+                    if not precio_venta or precio_venta == 0:
+                        precio_venta = costo / 0.60
+                        inv["precio_venta"] = round(precio_venta, 2)
+                    
+                    if "utilidad" not in inv or not inv.get("utilidad"):
+                        utilidad = precio_venta - costo
+                        inv["utilidad"] = round(utilidad, 2)
+                        inv["porcentaje_utilidad"] = 40.0
+                    elif "porcentaje_utilidad" not in inv:
+                        inv["porcentaje_utilidad"] = 40.0
+            
             return inventarios
         
         # Intentar primero como ObjectId (inventario específico)
@@ -902,13 +937,31 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
                     "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                     "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
                     "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                    "productoId": 1, "categoria": 1, "proveedor": 1
+                    "productoId": 1, "categoria": 1, "proveedor": 1,
+                    "utilidad": 1, "porcentaje_utilidad": 1
                 }
             )
             if inventario:
                 inventario["_id"] = str(inventario["_id"])
                 if "productoId" in inventario and isinstance(inventario["productoId"], ObjectId):
                     inventario["productoId"] = str(inventario["productoId"])
+                
+                # Calcular utilidad si no existe
+                costo = float(inventario.get("costo", 0))
+                precio_venta = float(inventario.get("precio_venta", 0))
+                
+                if costo > 0:
+                    if not precio_venta or precio_venta == 0:
+                        precio_venta = costo / 0.60
+                        inventario["precio_venta"] = round(precio_venta, 2)
+                    
+                    if "utilidad" not in inventario or not inventario.get("utilidad"):
+                        utilidad = precio_venta - costo
+                        inventario["utilidad"] = round(utilidad, 2)
+                        inventario["porcentaje_utilidad"] = 40.0
+                    elif "porcentaje_utilidad" not in inventario:
+                        inventario["porcentaje_utilidad"] = 40.0
+                
                 return [inventario]  # Retornar como lista para consistencia
         except (InvalidId, ValueError):
             # Si no es un ObjectId válido, tratar como ID de farmacia
@@ -921,7 +974,8 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
                 "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                 "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
                 "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                "productoId": 1, "categoria": 1, "proveedor": 1
+                "productoId": 1, "categoria": 1, "proveedor": 1,
+                "utilidad": 1, "porcentaje_utilidad": 1
             }
         ).sort("nombre", 1).limit(500).to_list(length=500)
         
@@ -940,15 +994,32 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
                     "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                     "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
                     "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                    "productoId": 1, "categoria": 1, "proveedor": 1
+                    "productoId": 1, "categoria": 1, "proveedor": 1,
+                    "utilidad": 1, "porcentaje_utilidad": 1
                 }
             ).limit(500).to_list(length=500)
         
-        # Convertir _id a string
+        # Convertir _id a string y calcular utilidad si no existe
         for inv in inventarios:
             inv["_id"] = str(inv["_id"])
             if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
                 inv["productoId"] = str(inv["productoId"])
+            
+            # Calcular utilidad si no existe
+            costo = float(inv.get("costo", 0))
+            precio_venta = float(inv.get("precio_venta", 0))
+            
+            if costo > 0:
+                if not precio_venta or precio_venta == 0:
+                    precio_venta = costo / 0.60
+                    inv["precio_venta"] = round(precio_venta, 2)
+                
+                if "utilidad" not in inv or not inv.get("utilidad"):
+                    utilidad = precio_venta - costo
+                    inv["utilidad"] = round(utilidad, 2)
+                    inv["porcentaje_utilidad"] = 40.0
+                elif "porcentaje_utilidad" not in inv:
+                    inv["porcentaje_utilidad"] = 40.0
         
         return inventarios
     except Exception as e:
@@ -977,6 +1048,22 @@ async def obtener_inventario(id: str, usuario: dict = Depends(get_current_user))
         inventario["_id"] = str(inventario["_id"])
         if "productoId" in inventario and isinstance(inventario["productoId"], ObjectId):
             inventario["productoId"] = str(inventario["productoId"])
+        
+        # Calcular utilidad si no existe
+        costo = float(inventario.get("costo", 0))
+        precio_venta = float(inventario.get("precio_venta", 0))
+        
+        if costo > 0:
+            if not precio_venta or precio_venta == 0:
+                precio_venta = costo / 0.60
+                inventario["precio_venta"] = round(precio_venta, 2)
+            
+            if "utilidad" not in inventario or not inventario.get("utilidad"):
+                utilidad = precio_venta - costo
+                inventario["utilidad"] = round(utilidad, 2)
+                inventario["porcentaje_utilidad"] = 40.0
+            elif "porcentaje_utilidad" not in inventario:
+                inventario["porcentaje_utilidad"] = 40.0
         
         return inventario
     except HTTPException:
@@ -1099,6 +1186,52 @@ async def actualizar_item_inventario(
         # No permitir actualizar el _id
         if "_id" in data:
             del data["_id"]
+        
+        # Obtener el item actual para calcular utilidad si es necesario
+        item_actual = await collection.find_one({"_id": item_object_id})
+        costo_actual = float(item_actual.get("costo", 0)) if item_actual else 0
+        precio_venta_actual = float(item_actual.get("precio_venta", 0)) if item_actual else 0
+        
+        # Si se actualiza el costo, recalcular precio_venta y utilidad con 40%
+        if "costo" in data:
+            nuevo_costo = float(data["costo"])
+            # Si no viene precio_venta explícito, calcular con 40% de utilidad
+            if "precio_venta" not in data or not data.get("precio_venta"):
+                data["precio_venta"] = nuevo_costo / 0.60
+                data["utilidad"] = round(data["precio_venta"] - nuevo_costo, 2)
+                data["porcentaje_utilidad"] = 40.0
+            else:
+                # Si viene precio_venta, calcular utilidad basada en ese precio
+                nuevo_precio_venta = float(data["precio_venta"])
+                data["utilidad"] = round(nuevo_precio_venta - nuevo_costo, 2)
+                if nuevo_costo > 0:
+                    data["porcentaje_utilidad"] = round((data["utilidad"] / nuevo_costo) * 100, 2)
+                else:
+                    data["porcentaje_utilidad"] = 0.0
+        
+        # Si solo se actualiza precio_venta (sin costo), recalcular utilidad
+        elif "precio_venta" in data and "costo" not in data:
+            nuevo_precio_venta = float(data["precio_venta"])
+            if costo_actual > 0:
+                data["utilidad"] = round(nuevo_precio_venta - costo_actual, 2)
+                data["porcentaje_utilidad"] = round((data["utilidad"] / costo_actual) * 100, 2)
+            else:
+                data["utilidad"] = 0.0
+                data["porcentaje_utilidad"] = 0.0
+        
+        # Si no se actualiza ni costo ni precio_venta, pero faltan campos de utilidad, calcularlos
+        elif "costo" not in data and "precio_venta" not in data:
+            if costo_actual > 0 and precio_venta_actual > 0:
+                # Recalcular utilidad con los valores actuales
+                utilidad_calculada = precio_venta_actual - costo_actual
+                porcentaje_calculado = (utilidad_calculada / costo_actual) * 100 if costo_actual > 0 else 0
+                data["utilidad"] = round(utilidad_calculada, 2)
+                data["porcentaje_utilidad"] = round(porcentaje_calculado, 2)
+            elif costo_actual > 0 and (not precio_venta_actual or precio_venta_actual == 0):
+                # Si hay costo pero no precio_venta, calcular con 40%
+                data["precio_venta"] = costo_actual / 0.60
+                data["utilidad"] = round(data["precio_venta"] - costo_actual, 2)
+                data["porcentaje_utilidad"] = 40.0
         
         # Agregar información de actualización
         data["usuarioActualizacion"] = usuario.get("correo", "unknown")

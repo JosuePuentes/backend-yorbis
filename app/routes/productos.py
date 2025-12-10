@@ -61,15 +61,36 @@ async def obtener_productos(
                 "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                 "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
                 "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                "productoId": 1, "categoria": 1, "proveedor": 1
+                "productoId": 1, "categoria": 1, "proveedor": 1,
+                "utilidad": 1, "porcentaje_utilidad": 1
             }
         ).sort("nombre", 1).limit(500).to_list(length=500)
         
-        # Convertir _id a string
+        # Convertir _id a string y calcular utilidad si no existe
         for producto in productos:
             producto["_id"] = str(producto["_id"])
             if "productoId" in producto and isinstance(producto["productoId"], ObjectId):
                 producto["productoId"] = str(producto["productoId"])
+            
+            # Calcular utilidad si no existe o si falta precio_venta
+            costo = float(producto.get("costo", 0))
+            precio_venta = float(producto.get("precio_venta", 0))
+            
+            if costo > 0:
+                # Si no hay precio_venta, calcular con 40% de utilidad
+                if not precio_venta or precio_venta == 0:
+                    precio_venta = costo / 0.60
+                    producto["precio_venta"] = round(precio_venta, 2)
+                
+                # Calcular utilidad si no existe
+                if "utilidad" not in producto or not producto.get("utilidad"):
+                    utilidad = precio_venta - costo
+                    producto["utilidad"] = round(utilidad, 2)
+                    producto["porcentaje_utilidad"] = 40.0
+                else:
+                    # Asegurar que porcentaje_utilidad exista
+                    if "porcentaje_utilidad" not in producto:
+                        producto["porcentaje_utilidad"] = 40.0
         
         print(f"🔍 [PRODUCTOS] Encontrados {len(productos)} productos")
         return productos
@@ -125,7 +146,8 @@ async def buscar_productos(
             projection={
                 "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                 "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1,
+                "utilidad": 1, "porcentaje_utilidad": 1
             }
         )
         
@@ -133,6 +155,23 @@ async def buscar_productos(
             producto_exacto["_id"] = str(producto_exacto["_id"])
             if "productoId" in producto_exacto and isinstance(producto_exacto["productoId"], ObjectId):
                 producto_exacto["productoId"] = str(producto_exacto["productoId"])
+            
+            # Calcular utilidad si no existe
+            costo = float(producto_exacto.get("costo", 0))
+            precio_venta = float(producto_exacto.get("precio_venta", 0))
+            
+            if costo > 0:
+                if not precio_venta or precio_venta == 0:
+                    precio_venta = costo / 0.60
+                    producto_exacto["precio_venta"] = round(precio_venta, 2)
+                
+                if "utilidad" not in producto_exacto or not producto_exacto.get("utilidad"):
+                    utilidad = precio_venta - costo
+                    producto_exacto["utilidad"] = round(utilidad, 2)
+                    producto_exacto["porcentaje_utilidad"] = 40.0
+                elif "porcentaje_utilidad" not in producto_exacto:
+                    producto_exacto["porcentaje_utilidad"] = 40.0
+            
             print(f"🔍 [PRODUCTOS] Coincidencia exacta encontrada")
             return [producto_exacto]
         
@@ -156,15 +195,32 @@ async def buscar_productos(
             projection={
                 "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                 "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1,
+                "utilidad": 1, "porcentaje_utilidad": 1
             }
         ).sort("nombre", 1).limit(limit).to_list(length=limit)
         
-        # Convertir _id a string
+        # Convertir _id a string y calcular utilidad si no existe
         for producto in productos:
             producto["_id"] = str(producto["_id"])
             if "productoId" in producto and isinstance(producto["productoId"], ObjectId):
                 producto["productoId"] = str(producto["productoId"])
+            
+            # Calcular utilidad si no existe
+            costo = float(producto.get("costo", 0))
+            precio_venta = float(producto.get("precio_venta", 0))
+            
+            if costo > 0:
+                if not precio_venta or precio_venta == 0:
+                    precio_venta = costo / 0.60
+                    producto["precio_venta"] = round(precio_venta, 2)
+                
+                if "utilidad" not in producto or not producto.get("utilidad"):
+                    utilidad = precio_venta - costo
+                    producto["utilidad"] = round(utilidad, 2)
+                    producto["porcentaje_utilidad"] = 40.0
+                elif "porcentaje_utilidad" not in producto:
+                    producto["porcentaje_utilidad"] = 40.0
         
         print(f"🔍 [PRODUCTOS] Encontrados {len(productos)} productos")
         return productos
@@ -205,7 +261,8 @@ async def buscar_codigo_producto(
             projection={
                 "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
                 "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1,
+                "utilidad": 1, "porcentaje_utilidad": 1
             }
         )
         
@@ -213,6 +270,23 @@ async def buscar_codigo_producto(
             producto["_id"] = str(producto["_id"])
             if "productoId" in producto and isinstance(producto["productoId"], ObjectId):
                 producto["productoId"] = str(producto["productoId"])
+            
+            # Calcular utilidad si no existe
+            costo = float(producto.get("costo", 0))
+            precio_venta = float(producto.get("precio_venta", 0))
+            
+            if costo > 0:
+                if not precio_venta or precio_venta == 0:
+                    precio_venta = costo / 0.60
+                    producto["precio_venta"] = round(precio_venta, 2)
+                
+                if "utilidad" not in producto or not producto.get("utilidad"):
+                    utilidad = precio_venta - costo
+                    producto["utilidad"] = round(utilidad, 2)
+                    producto["porcentaje_utilidad"] = 40.0
+                elif "porcentaje_utilidad" not in producto:
+                    producto["porcentaje_utilidad"] = 40.0
+            
             print(f"🔍 [PRODUCTOS] Código '{codigo}' encontrado")
             return [producto]
         else:
@@ -247,6 +321,22 @@ async def obtener_producto(producto_id: str, usuario_actual: dict = Depends(get_
         producto["_id"] = str(producto["_id"])
         if "productoId" in producto and isinstance(producto["productoId"], ObjectId):
             producto["productoId"] = str(producto["productoId"])
+        
+        # Calcular utilidad si no existe
+        costo = float(producto.get("costo", 0))
+        precio_venta = float(producto.get("precio_venta", 0))
+        
+        if costo > 0:
+            if not precio_venta or precio_venta == 0:
+                precio_venta = costo / 0.60
+                producto["precio_venta"] = round(precio_venta, 2)
+            
+            if "utilidad" not in producto or not producto.get("utilidad"):
+                utilidad = precio_venta - costo
+                producto["utilidad"] = round(utilidad, 2)
+                producto["porcentaje_utilidad"] = 40.0
+            elif "porcentaje_utilidad" not in producto:
+                producto["porcentaje_utilidad"] = 40.0
         
         return producto
     except HTTPException:
