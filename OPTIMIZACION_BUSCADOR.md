@@ -9,14 +9,17 @@ Se han realizado las siguientes optimizaciones para mejorar significativamente e
 - **Índice compuesto**: En `farmacia` + `estado` para filtros comunes
 - **Índices individuales**: En `codigo` y `nombre` para búsquedas específicas
 
-### 2. **Búsqueda Optimizada**
-- **Búsqueda de texto**: Usa el índice de texto de MongoDB cuando está disponible (más rápido)
-- **Fallback a regex**: Si no hay índice de texto, usa regex optimizado con prioridad a coincidencias al inicio
+### 2. **Búsqueda Optimizada (VERSIÓN MEJORADA)**
+- **Eliminada consulta de prueba**: Ya no se hace una consulta extra para verificar el índice de texto
+- **Búsqueda de texto directa**: Intenta usar índice de texto directamente, con fallback automático
+- **Regex optimizado**: Usa `$regex` nativo de MongoDB en lugar de Python regex (más rápido)
 - **Proyección de campos**: Solo trae los campos necesarios, reduciendo transferencia de datos
+- **Límite reducido**: De 100 a 50 resultados para mejor rendimiento
 
-### 3. **Agregación de MongoDB**
-- **Formateo en base de datos**: Los resultados se formatean directamente en MongoDB usando agregación
-- **Menos procesamiento en Python**: Reduce el tiempo de procesamiento en la aplicación
+### 3. **Agregación de MongoDB Simplificada**
+- **Pipeline optimizado**: Menos etapas, más eficiente
+- **Formateo en base de datos**: Los resultados se formatean directamente en MongoDB
+- **Mínimo procesamiento en Python**: Solo conversión de tipos básica
 - **Ordenamiento eficiente**: Ordena por relevancia (textScore) o por nombre
 
 ## 📋 Pasos para Aplicar las Optimizaciones
@@ -89,4 +92,5 @@ Una vez creados los índices, el buscador automáticamente:
    - Si la colección está vacía o tiene muy pocos documentos, los índices no ayudarán mucho
 
 4. **Considerar aumentar el límite de memoria de MongoDB** si es necesario
+
 

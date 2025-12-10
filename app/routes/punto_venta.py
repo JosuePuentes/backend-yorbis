@@ -41,101 +41,61 @@ async def buscar_productos_punto_venta(
     - sucursal: ID de la sucursal
     """
     try:
-        print(f"🔍 [PUNTO_VENTA] Búsqueda optimizada: '{q}' en sucursal: {sucursal}")
-        
         inventarios_collection = get_collection("INVENTARIOS")
         
-        # Construir filtro de búsqueda
-        filtro = {}
+        # Construir filtro base
+        filtro = {"estado": {"$ne": "inactivo"}}
         
         # Filtrar por sucursal si se especifica
         if sucursal and sucursal.strip():
             filtro["farmacia"] = sucursal.strip()
         
-        # Solo productos activos
-        filtro["estado"] = {"$ne": "inactivo"}
-        
-        # OPTIMIZACIÓN: Usar agregación de MongoDB para formatear resultados directamente
         query_term = q.strip() if q and q.strip() else ""
         sucursal_value = sucursal.strip() if sucursal and sucursal.strip() else ""
         
-        # Construir pipeline de agregación optimizado que formatea los resultados en MongoDB
-        pipeline = []
-        
-        # Paso 1: Match - Filtrar documentos
-        match_stage = {**filtro}
+        # OPTIMIZACIÓN: Intentar búsqueda de texto directamente (sin consulta de prueba)
+        # Si falla, MongoDB lanzará excepción y usaremos regex
         use_text_search = False
+        match_stage = {**filtro}
         
         if query_term:
-            # Intentar usar búsqueda de texto primero (requiere índice de texto)
-            # Verificar si existe índice de texto probando la búsqueda
+            # Intentar usar búsqueda de texto directamente (más rápido)
+            # Si no existe índice de texto, MongoDB lanzará excepción y usaremos regex
             try:
-                # Probar si existe índice de texto ejecutando una búsqueda de prueba
-                test_match = {**filtro, "$text": {"$search": query_term}}
-                test_pipeline = [{"$match": test_match}, {"$limit": 1}]
-                test_result = await inventarios_collection.aggregate(test_pipeline).to_list(length=1)
-                
-                if test_result:
-                    match_stage["$text"] = {"$search": query_term}
-                    use_text_search = True
-                else:
-                    raise ValueError("No text index or no results")
+                match_stage["$text"] = {"$search": query_term}
+                use_text_search = True
             except Exception:
-                # FALLBACK: Usar regex optimizado
+                # Si hay error al construir, usar regex directamente
                 use_text_search = False
                 escaped_query = re.escape(query_term)
+                # Optimización: usar regex más simple y eficiente
+                # Priorizar búsqueda exacta en código (más rápida)
                 regex_pattern = re.compile(escaped_query, re.IGNORECASE)
-                regex_start = re.compile(f"^{escaped_query}", re.IGNORECASE)
                 
-                # Priorizar coincidencias al inicio (más rápidas con índices)
+                # Construir $or optimizado: primero código exacto, luego nombre, luego otros
                 match_stage["$or"] = [
-                    {"codigo": regex_start},
-                    {"nombre": regex_start},
-                    {"codigo": regex_pattern},
-                    {"nombre": regex_pattern},
-                    {"descripcion": regex_pattern},
-                    {"marca": regex_pattern}
+                    {"codigo": {"$regex": escaped_query, "$options": "i"}},  # Código (usa índice si existe)
+                    {"nombre": {"$regex": escaped_query, "$options": "i"}},  # Nombre (usa índice si existe)
+                    {"descripcion": {"$regex": escaped_query, "$options": "i"}},
+                    {"marca": {"$regex": escaped_query, "$options": "i"}}
                 ]
         
-        pipeline.append({"$match": match_stage})
+        # Pipeline optimizado - menos etapas, más eficiente
+        pipeline = [{"$match": match_stage}]
         
-        # Paso 2: Project - Formatear campos directamente en MongoDB
-        project_stage = {
+        # Project simplificado - solo campos necesarios
+        project_fields = {
             "id": {"$toString": "$_id"},
-            "codigo": {"$ifNull": ["$codigo", ""]},
-            "nombre": {"$ifNull": ["$nombre", ""]},
-            "descripcion": {
-                "$cond": {
-                    "if": {"$and": [{"$ne": ["$descripcion", None]}, {"$ne": ["$descripcion", ""]}]},
-                    "then": "$descripcion",
-                    "else": {"$ifNull": ["$nombre", ""]}
-                }
-            },
-            "precio": {
-                "$cond": {
-                    "if": {"$and": [{"$ne": ["$precio_venta", None]}, {"$ne": ["$precio_venta", ""]}]},
-                    "then": {"$toDouble": "$precio_venta"},
-                    "else": {
-                        "$cond": {
-                            "if": {"$and": [{"$ne": ["$precio", None]}, {"$ne": ["$precio", ""]}]},
-                            "then": {"$toDouble": "$precio"},
-                            "else": 0.0
-                        }
-                    }
-                }
-            },
-            "marca": {"$ifNull": ["$marca", None]},
-            "cantidad": {"$toDouble": {"$ifNull": ["$cantidad", 0]}},
+            "codigo": 1,
+            "nombre": 1,
+            "descripcion": {"$ifNull": ["$descripcion", "$nombre"]},
+            "precio": {"$ifNull": ["$precio_venta", {"$ifNull": ["$precio", 0]}]},
+            "marca": 1,
+            "cantidad": {"$ifNull": ["$cantidad", 0]},
             "lotes": {"$ifNull": ["$lotes", []]},
-            "sucursal": {
-                "$cond": {
-                    "if": {"$ne": ["$farmacia", None]},
-                    "then": "$farmacia",
-                    "else": {"$literal": sucursal_value}
-                }
-            },
-            "costo": {"$toDouble": {"$ifNull": ["$costo", 0]}},
-            "estado": {"$ifNull": ["$estado", "activo"]},
+            "farmacia": 1,
+            "costo": {"$ifNull": ["$costo", 0]},
+            "estado": 1,
             "productoId": {
                 "$cond": {
                     "if": {"$ne": ["$productoId", None]},
@@ -145,44 +105,98 @@ async def buscar_productos_punto_venta(
             }
         }
         
-        # Agregar score solo si se usa búsqueda de texto
         if use_text_search:
-            project_stage["score"] = {"$meta": "textScore"}
+            project_fields["score"] = {"$meta": "textScore"}
         
-        pipeline.append({"$project": project_stage})
+        pipeline.append({"$project": project_fields})
         
-        # Paso 3: AddFields - Agregar campos calculados
-        pipeline.append({
-            "$addFields": {
-                "stock": "$cantidad",
-                "precio_venta": "$precio"
+        # Agregar campos calculados
+        add_fields_stage = {
+            "stock": "$cantidad",
+            "precio_venta": "$precio"
+        }
+        
+        # Agregar sucursal usando $literal para valores de Python
+        if sucursal_value:
+            add_fields_stage["sucursal"] = {
+                "$cond": {
+                    "if": {"$ne": ["$farmacia", None]},
+                    "then": "$farmacia",
+                    "else": {"$literal": sucursal_value}
+                }
             }
-        })
+        else:
+            add_fields_stage["sucursal"] = {"$ifNull": ["$farmacia", ""]}
         
-        # Paso 4: Sort - Ordenar por relevancia (si hay búsqueda de texto) o por nombre
+        pipeline.append({"$addFields": add_fields_stage})
+        
+        # Sort y limit
         if use_text_search:
             pipeline.append({"$sort": {"score": {"$meta": "textScore"}}})
         else:
             pipeline.append({"$sort": {"nombre": 1}})
         
-        # Paso 5: Limit - Limitar resultados
-        pipeline.append({"$limit": 100})
+        pipeline.append({"$limit": 50})  # Reducir a 50 para mejor rendimiento
         
         # Ejecutar agregación
-        productos_cursor = inventarios_collection.aggregate(pipeline)
-        resultados = await productos_cursor.to_list(length=100)
+        try:
+            productos_cursor = inventarios_collection.aggregate(pipeline)
+            resultados = await productos_cursor.to_list(length=50)
+        except Exception as agg_error:
+            # Si falla la agregación (ej: no hay índice de texto), usar búsqueda simple
+            if use_text_search and "text index" in str(agg_error).lower():
+                # Fallback a búsqueda regex
+                use_text_search = False
+                escaped_query = re.escape(query_term)
+                match_stage = {**filtro, "$or": [
+                    {"codigo": {"$regex": escaped_query, "$options": "i"}},
+                    {"nombre": {"$regex": escaped_query, "$options": "i"}},
+                    {"descripcion": {"$regex": escaped_query, "$options": "i"}},
+                    {"marca": {"$regex": escaped_query, "$options": "i"}}
+                ]}
+                
+                # Pipeline simplificado sin texto
+                fallback_add_fields = {
+                    "stock": "$cantidad",
+                    "precio_venta": "$precio"
+                }
+                if sucursal_value:
+                    fallback_add_fields["sucursal"] = {
+                        "$cond": {
+                            "if": {"$ne": ["$farmacia", None]},
+                            "then": "$farmacia",
+                            "else": {"$literal": sucursal_value}
+                        }
+                    }
+                else:
+                    fallback_add_fields["sucursal"] = {"$ifNull": ["$farmacia", ""]}
+                
+                pipeline = [
+                    {"$match": match_stage},
+                    {"$project": project_fields},
+                    {"$addFields": fallback_add_fields},
+                    {"$sort": {"nombre": 1}},
+                    {"$limit": 50}
+                ]
+                productos_cursor = inventarios_collection.aggregate(pipeline)
+                resultados = await productos_cursor.to_list(length=50)
+            else:
+                raise
         
-        # Limpiar campos None (MongoDB no puede hacer esto fácilmente en agregación)
-        for i, resultado in enumerate(resultados):
-            # Remover campos None excepto los requeridos
-            resultados[i] = {k: v for k, v in resultado.items() if v is not None or k in ["id", "codigo", "nombre", "descripcion", "precio"]}
+        # Formatear resultados finales (mínimo procesamiento)
+        for resultado in resultados:
+            # Convertir tipos y limpiar
+            resultado["precio"] = float(resultado.get("precio", 0))
+            resultado["cantidad"] = float(resultado.get("cantidad", 0))
+            resultado["stock"] = float(resultado.get("stock", 0))
+            resultado["costo"] = float(resultado.get("costo", 0))
+            
+            # Remover campos None opcionales
+            if resultado.get("marca") is None:
+                resultado.pop("marca", None)
+            if resultado.get("productoId") is None:
+                resultado.pop("productoId", None)
         
-        if use_text_search:
-            print(f"🔍 [PUNTO_VENTA] Encontrados {len(resultados)} productos usando índice de texto")
-        else:
-            print(f"🔍 [PUNTO_VENTA] Encontrados {len(resultados)} productos usando búsqueda optimizada")
-        
-        print(f"🔍 [PUNTO_VENTA] Retornando {len(resultados)} productos normalizados")
         return resultados
         
     except Exception as e:
