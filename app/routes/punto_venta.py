@@ -19,14 +19,26 @@ async def buscar_productos_punto_venta(
     usuario_actual: dict = Depends(get_current_user)
 ):
     """
-    Busca productos para el punto de venta (OPTIMIZADO).
-    Busca en código, nombre/descripción y marca.
-    Búsqueda case-insensitive y coincidencia parcial.
+    Busca productos para el punto de venta (ULTRA OPTIMIZADO).
+    
+    MODOS DE BÚSQUEDA:
+    1. Búsqueda RÁPIDA (con * al final): "esmalte*"
+       - Solo busca coincidencias que EMPIECEN con el término
+       - Busca solo en código y nombre (campos indexados)
+       - MUY RÁPIDA - usa índices de manera óptima
+       - Ejemplo: "esmalte*" → encuentra "esmalte rojo", "esmalte azul", etc.
+    
+    2. Búsqueda AMPLIA (sin *): "esmalte"
+       - Busca en todos los campos (código, nombre, descripción, marca)
+       - Coincidencias parciales en cualquier parte
+       - Más lenta pero más flexible
+       - Ejemplo: "esmalte" → encuentra "esmalte rojo", "pintura esmalte", etc.
     
     Optimizaciones aplicadas:
-    - Uso de índice de texto de MongoDB para búsquedas rápidas
-    - Proyección de campos para reducir transferencia de datos
-    - Agregación de MongoDB para formateo eficiente
+    - Búsqueda exacta por código primero (instantánea)
+    - Búsqueda rápida con * solo en campos indexados
+    - Proyección de campos para reducir transferencia
+    - Uso eficiente de índices de MongoDB
     
     Campos requeridos en respuesta:
     - id: ID del producto
@@ -52,11 +64,24 @@ async def buscar_productos_punto_venta(
         
         query_term = q.strip() if q and q.strip() else ""
         
+        # Detectar modo de búsqueda: rápida (*) o amplia (sin *)
+        busqueda_rapida = query_term.endswith("*")
+        if busqueda_rapida:
+            # Remover el * del término
+            query_term = query_term[:-1].strip()
+        
         # OPTIMIZACIÓN MÁXIMA: Búsqueda por código exacto primero (más rápida)
         if query_term:
             # 1. Intentar búsqueda exacta por código (MUY RÁPIDA con índice)
             codigo_filtro = {**filtro, "codigo": query_term.upper()}
-            producto_exacto = await inventarios_collection.find_one(codigo_filtro)
+            producto_exacto = await inventarios_collection.find_one(
+                codigo_filtro,
+                projection={
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                }
+            )
             
             if producto_exacto:
                 # Si encontramos coincidencia exacta, retornar solo ese resultado
@@ -81,9 +106,8 @@ async def buscar_productos_punto_venta(
                 resultado = {k: v for k, v in resultado.items() if v is not None or k in ["id", "codigo", "nombre", "descripcion", "precio"]}
                 return [resultado]
         
-        # 2. Si no hay coincidencia exacta, usar búsqueda optimizada
+        # 2. Si no hay término de búsqueda, retornar productos de la sucursal
         if not query_term:
-            # Sin término de búsqueda, retornar productos de la sucursal
             productos = await inventarios_collection.find(
                 filtro,
                 projection={
@@ -93,23 +117,36 @@ async def buscar_productos_punto_venta(
                 }
             ).sort("nombre", 1).limit(50).to_list(length=50)
         else:
-            # Búsqueda con término - usar find() con regex (más rápido que aggregate para casos simples)
+            # Escapar el término para regex
             escaped_query = re.escape(query_term)
             
-            # Construir $or optimizado - priorizar código y nombre (campos indexados)
-            match_stage = {
-                **filtro,
-                "$or": [
-                    {"codigo": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio
-                    {"nombre": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio
-                    {"codigo": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial
-                    {"nombre": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial
-                    {"descripcion": {"$regex": escaped_query, "$options": "i"}},
-                    {"marca": {"$regex": escaped_query, "$options": "i"}}
-                ]
-            }
+            if busqueda_rapida:
+                # BÚSQUEDA RÁPIDA: Solo coincidencias al INICIO en código y nombre (campos indexados)
+                # Esto es MUCHO más rápido porque usa mejor los índices
+                match_stage = {
+                    **filtro,
+                    "$or": [
+                        {"codigo": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio en código
+                        {"nombre": {"$regex": f"^{escaped_query}", "$options": "i"}}   # Coincidencia al inicio en nombre
+                    ]
+                }
+                print(f"⚡ [PUNTO_VENTA] Búsqueda RÁPIDA (con *): '{query_term}' - Solo código y nombre")
+            else:
+                # BÚSQUEDA AMPLIA: Busca en todos los campos con coincidencias parciales
+                match_stage = {
+                    **filtro,
+                    "$or": [
+                        {"codigo": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio
+                        {"nombre": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio
+                        {"codigo": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial
+                        {"nombre": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial
+                        {"descripcion": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial en descripción
+                        {"marca": {"$regex": escaped_query, "$options": "i"}}  # Coincidencia parcial en marca
+                    ]
+                }
+                print(f"🔍 [PUNTO_VENTA] Búsqueda AMPLIA (sin *): '{query_term}' - Todos los campos")
             
-            # Usar find() con proyección (más rápido que aggregate para búsquedas simples)
+            # Usar find() con proyección (más rápido)
             productos = await inventarios_collection.find(
                 match_stage,
                 projection={

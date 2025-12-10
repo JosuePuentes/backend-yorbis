@@ -807,12 +807,41 @@ async def agregar_inventario(data: Inventario, usuario: dict = Depends(get_curre
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/inventarios")
-async def listar_inventarios(usuario: dict = Depends(get_current_user)):
+async def listar_inventarios(
+    farmacia: Optional[str] = Query(None, description="Filtrar por farmacia"),
+    limit: Optional[int] = Query(500, description="Límite de resultados"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Lista inventarios (OPTIMIZADO).
+    Puede filtrar por farmacia y limitar resultados.
+    """
     try:
         collection = get_collection("INVENTARIOS")
-        inventarios = await collection.find({}).to_list(length=None)
+        filtro = {}
+        
+        # Filtrar por farmacia si se especifica
+        if farmacia and farmacia.strip():
+            filtro["farmacia"] = farmacia.strip()
+        
+        # OPTIMIZACIÓN: Usar proyección y límite
+        limit = min(limit or 500, 1000)  # Máximo 1000
+        
+        inventarios = await collection.find(
+            filtro,
+            projection={
+                "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+                "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
+                "productoId": 1, "categoria": 1, "proveedor": 1
+            }
+        ).sort("nombre", 1).limit(limit).to_list(length=limit)
+        
         for inv in inventarios:
             inv["_id"] = str(inv["_id"])
+            if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
+                inv["productoId"] = str(inv["productoId"])
+        
         return inventarios
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -848,7 +877,16 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
         # Si el ID está vacío, retornar todos los inventarios
         if not id or id.strip() == "":
             print("🔍 [INVENTARIOS] ID vacío, retornando todos los inventarios")
-            inventarios = await collection.find({}).to_list(length=None)
+            # OPTIMIZACIÓN: Usar proyección y límite
+            inventarios = await collection.find(
+                {},
+                projection={
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
+                    "productoId": 1, "categoria": 1, "proveedor": 1
+                }
+            ).sort("nombre", 1).limit(500).to_list(length=500)
             for inv in inventarios:
                 inv["_id"] = str(inv["_id"])
                 if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
@@ -858,7 +896,15 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
         # Intentar primero como ObjectId (inventario específico)
         try:
             object_id = ObjectId(id)
-            inventario = await collection.find_one({"_id": object_id})
+            inventario = await collection.find_one(
+                {"_id": object_id},
+                projection={
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
+                    "productoId": 1, "categoria": 1, "proveedor": 1
+                }
+            )
             if inventario:
                 inventario["_id"] = str(inventario["_id"])
                 if "productoId" in inventario and isinstance(inventario["productoId"], ObjectId):
@@ -868,19 +914,35 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
             # Si no es un ObjectId válido, tratar como ID de farmacia
             pass
         
-        # Buscar por farmacia
-        inventarios = await collection.find({"farmacia": id}).to_list(length=None)
+        # OPTIMIZACIÓN: Buscar por farmacia con proyección y límite
+        inventarios = await collection.find(
+            {"farmacia": id},
+            projection={
+                "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+                "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
+                "productoId": 1, "categoria": 1, "proveedor": 1
+            }
+        ).sort("nombre", 1).limit(500).to_list(length=500)
         
         # Si no se encontró nada, intentar buscar por cualquier campo que contenga el ID
         if len(inventarios) == 0:
             # Buscar en todos los campos posibles
-            inventarios = await collection.find({
-                "$or": [
-                    {"farmacia": id},
-                    {"_id": id},
-                    {"productoId": id}
-                ]
-            }).to_list(length=None)
+            inventarios = await collection.find(
+                {
+                    "$or": [
+                        {"farmacia": id},
+                        {"_id": id},
+                        {"productoId": id}
+                    ]
+                },
+                projection={
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
+                    "productoId": 1, "categoria": 1, "proveedor": 1
+                }
+            ).limit(500).to_list(length=500)
         
         # Convertir _id a string
         for inv in inventarios:

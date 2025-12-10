@@ -15,9 +15,10 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME") or "ferreteria_los_puentes"
 
-# Validar que MONGO_URI esté configurada
+# Si no está configurada, usar la URI por defecto (para desarrollo)
 if not MONGO_URI:
-    raise ValueError("MONGO_URI no está configurada. Por favor configura la variable de entorno MONGO_URI")
+    MONGO_URI = "mongodb+srv://rapifarma:w1Y7HoezUiMtfrWt@cluster0.9nirn5t.mongodb.net/?appName=Cluster0"
+    print("⚠️  Usando URI por defecto (no se encontró MONGO_URI en variables de entorno)")
 
 async def create_indexes():
     """Crea índices optimizados para búsquedas de productos"""
