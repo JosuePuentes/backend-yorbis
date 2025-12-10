@@ -980,8 +980,8 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
             "farmacia": 1, "costo": 1, "estado": 1, 
             "utilidad": 1, "porcentaje_utilidad": 1
         }
-        else:
-            # Intentar primero como ObjectId (inventario específico) - MÁS RÁPIDO
+        
+        # Intentar primero como ObjectId (inventario específico) - MÁS RÁPIDO
             try:
                 object_id = ObjectId(id)
                 inventario = await collection.find_one(
