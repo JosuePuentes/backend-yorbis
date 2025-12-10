@@ -982,23 +982,23 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
         }
         
         # Intentar primero como ObjectId (inventario específico) - MÁS RÁPIDO
-            try:
-                object_id = ObjectId(id)
-                inventario = await collection.find_one(
-                    {"_id": object_id, "estado": {"$ne": "inactivo"}},
-                    projection=proyeccion_minima
-                )
-                if inventario:
-                    inventarios = [inventario]
-                else:
-                    inventarios = []
-            except (InvalidId, ValueError):
-                # Si no es un ObjectId válido, tratar como ID de farmacia
-                # OPTIMIZACIÓN: Buscar directamente por farmacia (usa índice)
-                inventarios = await collection.find(
-                    {"farmacia": id.strip(), "estado": {"$ne": "inactivo"}},
-                    projection=proyeccion_minima
-                ).sort("nombre", 1).limit(300).to_list(length=300)  # Reducido a 300 para mejor rendimiento
+        try:
+            object_id = ObjectId(id)
+            inventario = await collection.find_one(
+                {"_id": object_id, "estado": {"$ne": "inactivo"}},
+                projection=proyeccion_minima
+            )
+            if inventario:
+                inventarios = [inventario]
+            else:
+                inventarios = []
+        except (InvalidId, ValueError):
+            # Si no es un ObjectId válido, tratar como ID de farmacia
+            # OPTIMIZACIÓN: Buscar directamente por farmacia (usa índice)
+            inventarios = await collection.find(
+                {"farmacia": id.strip(), "estado": {"$ne": "inactivo"}},
+                projection=proyeccion_minima
+            ).sort("nombre", 1).limit(300).to_list(length=300)  # Reducido a 300 para mejor rendimiento
         
         # OPTIMIZACIÓN: Procesamiento rápido y mínimo
         resultados = []
