@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
 from app.api.v1.routes_example import router as example_router
 from app.routes import auth, metas
 from app.routes.pagoscpp import router as pagoscpp_router
@@ -12,6 +14,7 @@ from app.routes.compras import router as compras_router
 from app.routes.productos import router as productos_router
 from app.routes.punto_venta import router as punto_venta_router
 from app.routes.clientes import router as clientes_router
+import re
 
 
 app = FastAPI(
@@ -19,6 +22,47 @@ app = FastAPI(
     description="API para Ferretería Los Puentes",
     version="1.0.0"
 )
+
+# Middleware para normalizar URLs (eliminar dobles barras)
+class URLNormalizeMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware que normaliza las URLs eliminando dobles barras.
+    Soluciona el problema de /inventarios//items/{item_id} -> /inventarios/items/{item_id}
+    """
+    async def dispatch(self, request: Request, call_next):
+        # Obtener la URL original
+        path = request.url.path
+        
+        # Normalizar: eliminar dobles barras (excepto después de http:// o https://)
+        # Reemplazar // con / excepto al inicio
+        normalized_path = re.sub(r'/+', '/', path)
+        # Asegurar que no termine con / (excepto si es solo /)
+        if normalized_path != '/' and normalized_path.endswith('/'):
+            normalized_path = normalized_path.rstrip('/')
+        
+        # Si la URL cambió, redirigir internamente
+        if normalized_path != path:
+            print(f"🔄 [MIDDLEWARE] Normalizando URL: {path} -> {normalized_path}")
+            # Construir nueva URL con query string si existe
+            new_url = normalized_path
+            if request.url.query:
+                new_url = f"{normalized_path}?{request.url.query}"
+            
+            # Crear un nuevo request con la URL normalizada
+            scope = dict(request.scope)
+            scope["path"] = normalized_path
+            scope["raw_path"] = normalized_path.encode()
+            
+            # Crear nuevo request
+            new_request = Request(scope, request.receive)
+            response = await call_next(new_request)
+            return response
+        
+        response = await call_next(request)
+        return response
+
+# Agregar middleware de normalización de URLs (antes de CORS)
+app.add_middleware(URLNormalizeMiddleware)
 
 # CORS - Configuración mejorada
 allowed_origins = [
