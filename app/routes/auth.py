@@ -879,6 +879,83 @@ async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# IMPORTANTE: Ruta específica sin ID debe ir ANTES de la ruta con {id}
+@router.get("/inventarios/items")
+async def obtener_items_inventario_sin_id(usuario: dict = Depends(get_current_user)):
+    """
+    Obtiene todos los items de inventario sin especificar ID de farmacia (ULTRA OPTIMIZADO).
+    Ruta específica para cuando el frontend llama /inventarios/items (después de normalización).
+    
+    OPTIMIZACIONES APLICADAS:
+    - Proyección mínima (solo campos esenciales)
+    - Solo productos activos
+    - Límite reducido para mejor rendimiento
+    - Procesamiento rápido
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        
+        # OPTIMIZACIÓN: Proyección mínima (solo campos esenciales)
+        proyeccion_minima = {
+            "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+            "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+            "farmacia": 1, "costo": 1, "estado": 1, 
+            "utilidad": 1, "porcentaje_utilidad": 1
+        }
+        
+        print("🔍 [INVENTARIOS] Obteniendo todos los items (sin ID - OPTIMIZADO)")
+        # OPTIMIZACIÓN MÁXIMA: Proyección mínima, solo activos, límite reducido
+        inventarios = await collection.find(
+            {"estado": {"$ne": "inactivo"}},
+            projection=proyeccion_minima
+        ).sort("nombre", 1).limit(300).to_list(length=300)  # Reducido a 300 para mejor rendimiento
+        
+        # OPTIMIZACIÓN: Procesamiento rápido y mínimo
+        resultados = []
+        for inv in inventarios:
+            # Convertir _id a string
+            inv_id = str(inv["_id"])
+            
+            # Calcular valores si no existen (procesamiento mínimo)
+            costo = float(inv.get("costo", 0))
+            precio_venta = float(inv.get("precio_venta") or inv.get("precio", 0))
+            
+            # Calcular precio_venta y utilidad si no están definidos
+            if costo > 0 and (precio_venta == 0 or "precio_venta" not in inv):
+                precio_venta = costo / 0.60  # 40% de utilidad
+            
+            utilidad = precio_venta - costo if precio_venta > 0 and costo > 0 else float(inv.get("utilidad", 0))
+            porcentaje_utilidad = float(inv.get("porcentaje_utilidad", 40.0)) if utilidad > 0 else 0.0
+            
+            # Construir resultado optimizado
+            resultado = {
+                "_id": inv_id,
+                "id": inv_id,
+                "codigo": inv.get("codigo", ""),
+                "nombre": inv.get("nombre", ""),
+                "descripcion": inv.get("descripcion", ""),
+                "marca": inv.get("marca", ""),
+                "cantidad": float(inv.get("cantidad", 0)),
+                "costo": round(costo, 2),
+                "precio_venta": round(precio_venta, 2),
+                "precio": round(precio_venta, 2),
+                "utilidad": round(utilidad, 2),
+                "porcentaje_utilidad": round(porcentaje_utilidad, 2),
+                "farmacia": inv.get("farmacia", ""),
+                "estado": inv.get("estado", "activo")
+            }
+            
+            resultados.append(resultado)
+        
+        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (OPTIMIZADO - sin ID)")
+        return resultados
+        
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error obteniendo items: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/inventarios/{id}/items")
 async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_user)):
     """
@@ -886,7 +963,6 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
     El {id} puede ser el ID de la farmacia o el ID de un inventario específico.
     Si es un ID de farmacia, retorna todos los items de esa farmacia.
     Si es un ID de inventario, retorna ese item específico.
-    Si el ID está vacío, retorna todos los inventarios.
     
     OPTIMIZACIONES APLICADAS:
     - Proyección mínima (solo campos esenciales)
@@ -904,15 +980,6 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
             "farmacia": 1, "costo": 1, "estado": 1, 
             "utilidad": 1, "porcentaje_utilidad": 1
         }
-        
-        # Si el ID está vacío, retornar todos los inventarios (con límite)
-        if not id or id.strip() == "":
-            print("🔍 [INVENTARIOS] ID vacío, retornando todos los inventarios (OPTIMIZADO)")
-            # OPTIMIZACIÓN MÁXIMA: Proyección mínima, solo activos, límite reducido
-            inventarios = await collection.find(
-                {"estado": {"$ne": "inactivo"}},
-                projection=proyeccion_minima
-            ).sort("nombre", 1).limit(500).to_list(length=500)
         else:
             # Intentar primero como ObjectId (inventario específico) - MÁS RÁPIDO
             try:
@@ -931,7 +998,7 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
                 inventarios = await collection.find(
                     {"farmacia": id.strip(), "estado": {"$ne": "inactivo"}},
                     projection=proyeccion_minima
-                ).sort("nombre", 1).limit(500).to_list(length=500)
+                ).sort("nombre", 1).limit(300).to_list(length=300)  # Reducido a 300 para mejor rendimiento
         
         # OPTIMIZACIÓN: Procesamiento rápido y mínimo
         resultados = []
