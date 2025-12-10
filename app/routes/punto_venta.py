@@ -768,48 +768,144 @@ async def actualizar_resumen_ventas(venta_data: dict, farmacia: str, fecha: str)
 
 @router.get("/punto-venta/ventas/resumen")
 async def obtener_resumen_ventas(
-    sucursal: str = Query(..., description="ID de la sucursal (farmacia)"),
-    fecha: Optional[str] = Query(None, description="Fecha en formato YYYY-MM-DD (opcional, por defecto hoy)"),
+    fecha_inicio: str = Query(..., description="Fecha de inicio en formato YYYY-MM-DD"),
+    fecha_fin: str = Query(..., description="Fecha de fin en formato YYYY-MM-DD"),
     usuario_actual: dict = Depends(get_current_user)
 ):
     """
-    Obtiene el resumen de ventas por sucursal y día.
-    Retorna los totales discriminados por tipo de pago.
+    Obtiene el resumen de ventas agrupado por sucursal en un rango de fechas.
+    Retorna totales discriminados por tipo de pago para cada sucursal.
+    
+    Estructura de respuesta:
+    {
+      "ventas_por_sucursal": {
+        "sucursal_id": {
+          "total_efectivo_usd": 0,
+          "total_zelle_usd": 0,
+          "total_usd_recibido": 0,
+          "total_vales_usd": 0,
+          "total_bs": 0,
+          "desglose_bs": {
+            "pago_movil": 0,
+            "efectivo": 0,
+            "tarjeta_debit": 0,
+            "tarjeta_credito": 0,
+            "recargas": 0,
+            "devoluciones": 0
+          },
+          "total_costo_inventario": 0,
+          "total_ventas": 0
+        }
+      }
+    }
     """
     try:
-        # Si no se especifica fecha, usar la fecha actual
-        if not fecha:
-            fecha = datetime.now().strftime("%Y-%m-%d")
+        print(f"📊 [RESUMEN] Obteniendo resumen de ventas: {fecha_inicio} a {fecha_fin}")
         
         resumen_collection = get_collection("RESUMEN_VENTAS")
+        ventas_collection = get_collection("VENTAS")
         
-        resumen = await resumen_collection.find_one({
-            "farmacia": sucursal,
-            "fecha": fecha
-        })
+        # Buscar todos los resúmenes en el rango de fechas
+        resumenes = await resumen_collection.find({
+            "fecha": {"$gte": fecha_inicio, "$lte": fecha_fin}
+        }).to_list(length=None)
         
-        if resumen:
-            resumen["_id"] = str(resumen["_id"])
-            return resumen
-        else:
-            # Retornar resumen vacío si no existe
-            return {
-                "farmacia": sucursal,
-                "fecha": fecha,
-                "totales": {
-                    "usd_efectivo": 0.0,
-                    "usd_zelle": 0.0,
-                    "vales_usd": 0.0,
-                    "efectivo_bs": 0.0,
-                    "pago_movil_bs": 0.0,
-                    "punto_debito_bs": 0.0,
-                    "punto_credito_bs": 0.0,
-                    "recarga_bs": 0.0,
-                    "devoluciones_bs": 0.0,
-                    "costo_inventario": 0.0,
-                    "venta_neta": 0.0
+        # Agrupar por sucursal
+        ventas_por_sucursal = {}
+        
+        for resumen in resumenes:
+            farmacia = resumen.get("farmacia", "unknown")
+            totales = resumen.get("totales", {})
+            
+            # Inicializar sucursal si no existe
+            if farmacia not in ventas_por_sucursal:
+                ventas_por_sucursal[farmacia] = {
+                    "total_efectivo_usd": 0.0,
+                    "total_zelle_usd": 0.0,
+                    "total_usd_recibido": 0.0,
+                    "total_vales_usd": 0.0,
+                    "total_bs": 0.0,
+                    "desglose_bs": {
+                        "pago_movil": 0.0,
+                        "efectivo": 0.0,
+                        "tarjeta_debit": 0.0,
+                        "tarjeta_credito": 0.0,
+                        "recargas": 0.0,
+                        "devoluciones": 0.0
+                    },
+                    "total_costo_inventario": 0.0,
+                    "total_ventas": 0.0
                 }
-            }
+            
+            # Acumular totales USD
+            ventas_por_sucursal[farmacia]["total_efectivo_usd"] += float(totales.get("usd_efectivo", 0))
+            ventas_por_sucursal[farmacia]["total_zelle_usd"] += float(totales.get("usd_zelle", 0))
+            ventas_por_sucursal[farmacia]["total_vales_usd"] += float(totales.get("vales_usd", 0))
+            
+            # Calcular total USD recibido
+            ventas_por_sucursal[farmacia]["total_usd_recibido"] = (
+                ventas_por_sucursal[farmacia]["total_efectivo_usd"] +
+                ventas_por_sucursal[farmacia]["total_zelle_usd"]
+            )
+            
+            # Acumular totales Bs
+            ventas_por_sucursal[farmacia]["desglose_bs"]["pago_movil"] += float(totales.get("pago_movil_bs", 0))
+            ventas_por_sucursal[farmacia]["desglose_bs"]["efectivo"] += float(totales.get("efectivo_bs", 0))
+            ventas_por_sucursal[farmacia]["desglose_bs"]["tarjeta_debit"] += float(totales.get("punto_debito_bs", 0))
+            ventas_por_sucursal[farmacia]["desglose_bs"]["tarjeta_credito"] += float(totales.get("punto_credito_bs", 0))
+            ventas_por_sucursal[farmacia]["desglose_bs"]["recargas"] += float(totales.get("recarga_bs", 0))
+            ventas_por_sucursal[farmacia]["desglose_bs"]["devoluciones"] += float(totales.get("devoluciones_bs", 0))
+            
+            # Calcular total Bs
+            ventas_por_sucursal[farmacia]["total_bs"] = (
+                ventas_por_sucursal[farmacia]["desglose_bs"]["pago_movil"] +
+                ventas_por_sucursal[farmacia]["desglose_bs"]["efectivo"] +
+                ventas_por_sucursal[farmacia]["desglose_bs"]["tarjeta_debit"] +
+                ventas_por_sucursal[farmacia]["desglose_bs"]["tarjeta_credito"] +
+                ventas_por_sucursal[farmacia]["desglose_bs"]["recargas"] -
+                ventas_por_sucursal[farmacia]["desglose_bs"]["devoluciones"]
+            )
+            
+            # Acumular costo de inventario
+            ventas_por_sucursal[farmacia]["total_costo_inventario"] += float(totales.get("costo_inventario", 0))
+            
+            # Calcular total de ventas (venta neta)
+            venta_neta = float(totales.get("venta_neta", 0))
+            if venta_neta == 0:
+                # Si no hay venta_neta calculada, calcularla
+                venta_neta = (
+                    float(totales.get("usd_efectivo", 0)) +
+                    float(totales.get("usd_zelle", 0)) +
+                    float(totales.get("vales_usd", 0)) +
+                    float(totales.get("efectivo_bs", 0)) +
+                    float(totales.get("pago_movil_bs", 0)) +
+                    float(totales.get("punto_debito_bs", 0)) +
+                    float(totales.get("punto_credito_bs", 0)) +
+                    float(totales.get("recarga_bs", 0)) -
+                    float(totales.get("devoluciones_bs", 0))
+                )
+            ventas_por_sucursal[farmacia]["total_ventas"] += venta_neta
+        
+        # Redondear todos los valores a 2 decimales
+        for sucursal_id in ventas_por_sucursal:
+            sucursal_data = ventas_por_sucursal[sucursal_id]
+            sucursal_data["total_efectivo_usd"] = round(sucursal_data["total_efectivo_usd"], 2)
+            sucursal_data["total_zelle_usd"] = round(sucursal_data["total_zelle_usd"], 2)
+            sucursal_data["total_usd_recibido"] = round(sucursal_data["total_usd_recibido"], 2)
+            sucursal_data["total_vales_usd"] = round(sucursal_data["total_vales_usd"], 2)
+            sucursal_data["total_bs"] = round(sucursal_data["total_bs"], 2)
+            sucursal_data["total_costo_inventario"] = round(sucursal_data["total_costo_inventario"], 2)
+            sucursal_data["total_ventas"] = round(sucursal_data["total_ventas"], 2)
+            
+            # Redondear desglose_bs
+            for key in sucursal_data["desglose_bs"]:
+                sucursal_data["desglose_bs"][key] = round(sucursal_data["desglose_bs"][key], 2)
+        
+        print(f"✅ [RESUMEN] Resumen generado para {len(ventas_por_sucursal)} sucursales")
+        
+        return {
+            "ventas_por_sucursal": ventas_por_sucursal
+        }
             
     except Exception as e:
         print(f"❌ [RESUMEN] Error obteniendo resumen: {e}")
