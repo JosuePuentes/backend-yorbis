@@ -283,6 +283,9 @@ async def crear_venta(
         fecha_venta = venta_dict.get("fecha", fecha_actual.strftime("%Y-%m-%d"))
         farmacia = venta_dict.get("sucursal") or venta_dict.get("farmacia")
         
+        # IMPORTANTE: Establecer estado como "procesada" al crear la venta
+        venta_dict["estado"] = "procesada"
+        
         if not farmacia:
             raise HTTPException(status_code=400, detail="La venta debe tener una sucursal (sucursal o farmacia)")
         
@@ -342,9 +345,13 @@ async def crear_venta(
         
         print(f"✅ [PUNTO_VENTA] Venta creada: {venta_id} - Descuento por divisa: {descuento_por_divisa}% - Costo inventario: {costo_inventario_total}")
         
+        # Asegurar que el estado esté en la respuesta
+        venta_dict["estado"] = "procesada"
+        
         return {
             "message": "Venta creada exitosamente",
             "id": venta_id,
+            "estado": "procesada",  # Incluir estado en la respuesta
             "venta": venta_dict
         }
         
@@ -412,23 +419,25 @@ async def obtener_ventas_usuario(
     usuario_actual: dict = Depends(get_current_user)
 ):
     """
-    Obtiene las ventas del usuario actual.
+    Obtiene las ventas procesadas del usuario actual.
+    Solo retorna ventas con estado: "procesada".
     Incluye el campo descuento_por_divisa en cada venta.
     Requiere autenticación.
     """
     try:
         usuario_correo = usuario_actual.get("correo", "unknown")
-        print(f"📋 [PUNTO_VENTA] Obteniendo ventas del usuario: {usuario_correo}")
+        print(f"📋 [PUNTO_VENTA] Obteniendo ventas procesadas del usuario: {usuario_correo}")
         
         ventas_collection = get_collection("VENTAS")
         
-        # Buscar ventas del usuario actual
+        # Buscar ventas del usuario actual con estado "procesada"
         filtro = {
             "$or": [
                 {"usuarioCreacion": usuario_correo},
                 {"usuario": usuario_correo},
                 {"vendedor": usuario_correo}
-            ]
+            ],
+            "estado": "procesada"  # Filtrar solo ventas procesadas
         }
         
         ventas = await ventas_collection.find(filtro).sort("fechaCreacion", -1).to_list(length=None)
