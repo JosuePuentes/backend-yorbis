@@ -38,19 +38,21 @@ async def buscar_productos_punto_venta(
     - Búsqueda exacta por código primero (instantánea)
     - Búsqueda rápida con * solo en campos indexados
     - Proyección de campos para reducir transferencia
-    - Uso eficiente de índices de MongoDB
+    - Uso eficiente de índices de MongoDB (código, nombre, descripción, marca)
+    - Cálculo automático de precios desde costo + utilidad si no están definidos
     
-    Campos requeridos en respuesta:
+    Campos en respuesta:
     - id: ID del producto
     - codigo: Código del producto
-    - nombre/descripcion: Nombre o descripción
+    - nombre: Nombre del producto
+    - costo: Costo del producto
+    - utilidad: Utilidad en dinero (precio_venta - costo)
+    - porcentaje_utilidad: Porcentaje de utilidad
     - precio: Precio de venta
-    
-    Campos opcionales:
-    - marca: Marca del producto
+    - precio_venta: Precio de venta (alias de precio)
     - cantidad/stock: Stock disponible
-    - lotes: Información de lotes
     - sucursal: ID de la sucursal
+    - estado: Estado del producto
     """
     try:
         inventarios_collection = get_collection("INVENTARIOS")
@@ -74,43 +76,68 @@ async def buscar_productos_punto_venta(
         if query_term:
             # 1. Intentar búsqueda exacta por código (MUY RÁPIDA con índice)
             codigo_filtro = {**filtro, "codigo": query_term.upper()}
-            # OPTIMIZACIÓN: Proyección mínima para búsqueda exacta
+            # OPTIMIZACIÓN: Proyección incluyendo costo y utilidad
             producto_exacto = await inventarios_collection.find_one(
                 codigo_filtro,
                 projection={
                     "_id": 1, "codigo": 1, "nombre": 1,
                     "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1
                 }
             )
             
             if producto_exacto:
-                # Si encontramos coincidencia exacta, retornar solo ese resultado
-                # OPTIMIZACIÓN: Solo campos esenciales para respuesta rápida
-                precio_venta = producto_exacto.get("precio_venta") or producto_exacto.get("precio", 0)
+                # Calcular precios desde costo + utilidad si no están definidos
+                costo = float(producto_exacto.get("costo", 0))
+                precio_venta_actual = float(producto_exacto.get("precio_venta", 0))
+                utilidad_actual = producto_exacto.get("utilidad")
+                
+                # Si hay costo pero no precio_venta, calcular con 40% de utilidad
+                if costo > 0 and (not precio_venta_actual or precio_venta_actual == 0):
+                    precio_venta_actual = costo / 0.60
+                    utilidad_actual = precio_venta_actual - costo
+                
+                # Si hay precio_venta pero no utilidad, calcularla
+                elif precio_venta_actual > 0 and (not utilidad_actual or utilidad_actual == 0):
+                    if costo > 0:
+                        utilidad_actual = precio_venta_actual - costo
+                    else:
+                        utilidad_actual = 0
+                
                 cantidad = producto_exacto.get("cantidad", 0)
                 
                 resultado = {
                     "id": str(producto_exacto["_id"]),
                     "codigo": producto_exacto.get("codigo", ""),
                     "nombre": producto_exacto.get("nombre", ""),
-                    "precio": float(precio_venta),
-                    "precio_venta": float(precio_venta),
+                    "costo": round(costo, 2),
+                    "utilidad": round(utilidad_actual or 0, 2),
+                    "precio": round(precio_venta_actual, 2),
+                    "precio_venta": round(precio_venta_actual, 2),
                     "cantidad": float(cantidad),
                     "stock": float(cantidad),
                     "sucursal": producto_exacto.get("farmacia", sucursal or ""),
                     "estado": producto_exacto.get("estado", "activo")
                 }
+                
+                # Agregar porcentaje de utilidad si existe
+                if producto_exacto.get("porcentaje_utilidad"):
+                    resultado["porcentaje_utilidad"] = float(producto_exacto["porcentaje_utilidad"])
+                elif costo > 0 and utilidad_actual:
+                    resultado["porcentaje_utilidad"] = round((utilidad_actual / costo) * 100, 2)
+                
                 return [resultado]
         
         # 2. Si no hay término de búsqueda, retornar productos de la sucursal
         if not query_term:
-            # OPTIMIZACIÓN: Proyección mínima cuando no hay búsqueda
+            # OPTIMIZACIÓN: Proyección incluyendo costo y utilidad
             productos = await inventarios_collection.find(
                 filtro,
                 projection={
                     "_id": 1, "codigo": 1, "nombre": 1,
                     "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1
                 }
             ).sort("nombre", 1).limit(30).to_list(length=30)
@@ -145,36 +172,58 @@ async def buscar_productos_punto_venta(
                 }
                 print(f"🔍 [PUNTO_VENTA] Búsqueda AMPLIA (sin *): '{query_term}' - Todos los campos")
             
-            # OPTIMIZACIÓN MÁXIMA: Proyección mínima (solo campos esenciales) y límite reducido
-            # Reducir límite a 30 para mejor rendimiento
+            # OPTIMIZACIÓN: Proyección incluyendo costo y utilidad (usa índices optimizados)
             productos = await inventarios_collection.find(
                 match_stage,
                 projection={
                     "_id": 1, "codigo": 1, "nombre": 1, 
                     "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1
                 }
             ).sort("nombre", 1).limit(30).to_list(length=30)
         
-        # OPTIMIZACIÓN MÁXIMA: Formateo ultra-rápido (solo campos esenciales)
-        # Reducir procesamiento al mínimo absoluto
+        # Formatear resultados incluyendo costo y utilidad calculados
         resultados = []
         for producto in productos:
-            precio_venta = producto.get("precio_venta") or producto.get("precio", 0)
+            # Calcular precios desde costo + utilidad si no están definidos
+            costo = float(producto.get("costo", 0))
+            precio_venta_actual = float(producto.get("precio_venta", 0))
+            utilidad_actual = producto.get("utilidad")
+            
+            # Si hay costo pero no precio_venta, calcular con 40% de utilidad
+            if costo > 0 and (not precio_venta_actual or precio_venta_actual == 0):
+                precio_venta_actual = costo / 0.60
+                utilidad_actual = precio_venta_actual - costo
+            
+            # Si hay precio_venta pero no utilidad, calcularla
+            elif precio_venta_actual > 0 and (not utilidad_actual or utilidad_actual == 0):
+                if costo > 0:
+                    utilidad_actual = precio_venta_actual - costo
+                else:
+                    utilidad_actual = 0
+            
             cantidad = producto.get("cantidad", 0)
             
-            # Solo campos esenciales para punto de venta
             resultado = {
                 "id": str(producto["_id"]),
                 "codigo": producto.get("codigo", ""),
                 "nombre": producto.get("nombre", ""),
-                "precio": float(precio_venta),
-                "precio_venta": float(precio_venta),
+                "costo": round(costo, 2),
+                "utilidad": round(utilidad_actual or 0, 2),
+                "precio": round(precio_venta_actual, 2),
+                "precio_venta": round(precio_venta_actual, 2),
                 "cantidad": float(cantidad),
                 "stock": float(cantidad),
                 "sucursal": producto.get("farmacia", sucursal or ""),
                 "estado": producto.get("estado", "activo")
             }
+            
+            # Agregar porcentaje de utilidad si existe o calcularlo
+            if producto.get("porcentaje_utilidad"):
+                resultado["porcentaje_utilidad"] = float(producto["porcentaje_utilidad"])
+            elif costo > 0 and utilidad_actual:
+                resultado["porcentaje_utilidad"] = round((utilidad_actual / costo) * 100, 2)
             
             resultados.append(resultado)
         
