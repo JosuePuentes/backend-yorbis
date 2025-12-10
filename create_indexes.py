@@ -70,6 +70,39 @@ async def create_indexes():
         except Exception as e:
             print(f"   ⚠ Error creando índice en nombre (puede que ya exista): {e}")
         
+        # 5. Índice compuesto para búsquedas por farmacia + nombre (MUY COMÚN en punto de venta)
+        print("📝 Creando índice compuesto (farmacia + nombre)...")
+        try:
+            await inventarios_collection.create_index([
+                ("farmacia", 1),
+                ("nombre", 1)
+            ], name="farmacia_nombre_index")
+            print("   ✅ Índice compuesto (farmacia + nombre) creado")
+        except Exception as e:
+            print(f"   ⚠ Error creando índice compuesto (farmacia + nombre) (puede que ya exista): {e}")
+        
+        # 6. Índice compuesto para búsquedas por farmacia + código (MUY COMÚN)
+        print("📝 Creando índice compuesto (farmacia + código)...")
+        try:
+            await inventarios_collection.create_index([
+                ("farmacia", 1),
+                ("codigo", 1)
+            ], name="farmacia_codigo_index")
+            print("   ✅ Índice compuesto (farmacia + código) creado")
+        except Exception as e:
+            print(f"   ⚠ Error creando índice compuesto (farmacia + código) (puede que ya exista): {e}")
+        
+        # 7. Índice compuesto para estado + nombre (para filtrar inactivos rápidamente)
+        print("📝 Creando índice compuesto (estado + nombre)...")
+        try:
+            await inventarios_collection.create_index([
+                ("estado", 1),
+                ("nombre", 1)
+            ], name="estado_nombre_index")
+            print("   ✅ Índice compuesto (estado + nombre) creado")
+        except Exception as e:
+            print(f"   ⚠ Error creando índice compuesto (estado + nombre) (puede que ya exista): {e}")
+        
         # Listar todos los índices creados
         print("\n📋 Índices existentes en la colección INVENTARIOS:")
         indexes = await inventarios_collection.list_indexes().to_list(length=None)

@@ -74,111 +74,107 @@ async def buscar_productos_punto_venta(
         if query_term:
             # 1. Intentar búsqueda exacta por código (MUY RÁPIDA con índice)
             codigo_filtro = {**filtro, "codigo": query_term.upper()}
+            # OPTIMIZACIÓN: Proyección mínima para búsqueda exacta
             producto_exacto = await inventarios_collection.find_one(
                 codigo_filtro,
                 projection={
-                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                    "_id": 1, "codigo": 1, "nombre": 1,
+                    "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "farmacia": 1, "estado": 1
                 }
             )
             
             if producto_exacto:
                 # Si encontramos coincidencia exacta, retornar solo ese resultado
+                # OPTIMIZACIÓN: Solo campos esenciales para respuesta rápida
+                precio_venta = producto_exacto.get("precio_venta") or producto_exacto.get("precio", 0)
+                cantidad = producto_exacto.get("cantidad", 0)
+                
                 resultado = {
                     "id": str(producto_exacto["_id"]),
                     "codigo": producto_exacto.get("codigo", ""),
                     "nombre": producto_exacto.get("nombre", ""),
-                    "descripcion": producto_exacto.get("descripcion") or producto_exacto.get("nombre", ""),
-                    "precio": float(producto_exacto.get("precio_venta") or producto_exacto.get("precio", 0)),
-                    "marca": producto_exacto.get("marca"),
-                    "cantidad": float(producto_exacto.get("cantidad", 0)),
-                    "stock": float(producto_exacto.get("cantidad", 0)),
-                    "lotes": producto_exacto.get("lotes", []),
+                    "precio": float(precio_venta),
+                    "precio_venta": float(precio_venta),
+                    "cantidad": float(cantidad),
+                    "stock": float(cantidad),
                     "sucursal": producto_exacto.get("farmacia", sucursal or ""),
-                    "costo": float(producto_exacto.get("costo", 0)),
-                    "estado": producto_exacto.get("estado", "activo"),
-                    "precio_venta": float(producto_exacto.get("precio_venta") or producto_exacto.get("precio", 0))
+                    "estado": producto_exacto.get("estado", "activo")
                 }
-                if producto_exacto.get("productoId"):
-                    resultado["productoId"] = str(producto_exacto["productoId"])
-                # Limpiar None
-                resultado = {k: v for k, v in resultado.items() if v is not None or k in ["id", "codigo", "nombre", "descripcion", "precio"]}
                 return [resultado]
         
         # 2. Si no hay término de búsqueda, retornar productos de la sucursal
         if not query_term:
+            # OPTIMIZACIÓN: Proyección mínima cuando no hay búsqueda
             productos = await inventarios_collection.find(
                 filtro,
                 projection={
-                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                    "_id": 1, "codigo": 1, "nombre": 1,
+                    "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "farmacia": 1, "estado": 1
                 }
-            ).sort("nombre", 1).limit(50).to_list(length=50)
+            ).sort("nombre", 1).limit(30).to_list(length=30)
         else:
             # Escapar el término para regex
             escaped_query = re.escape(query_term)
             
             if busqueda_rapida:
                 # BÚSQUEDA RÁPIDA: Solo coincidencias al INICIO en código y nombre (campos indexados)
-                # Esto es MUCHO más rápido porque usa mejor los índices
+                # OPTIMIZACIÓN MÁXIMA: Priorizar código primero (índice más rápido)
                 match_stage = {
                     **filtro,
                     "$or": [
-                        {"codigo": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio en código
+                        {"codigo": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio en código (MÁS RÁPIDO)
                         {"nombre": {"$regex": f"^{escaped_query}", "$options": "i"}}   # Coincidencia al inicio en nombre
                     ]
                 }
                 print(f"⚡ [PUNTO_VENTA] Búsqueda RÁPIDA (con *): '{query_term}' - Solo código y nombre")
             else:
-                # BÚSQUEDA AMPLIA: Busca en todos los campos con coincidencias parciales
+                # BÚSQUEDA AMPLIA: Busca en todos los campos pero prioriza código y nombre
+                # OPTIMIZACIÓN: Priorizar coincidencias al inicio primero
                 match_stage = {
                     **filtro,
                     "$or": [
-                        {"codigo": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio
-                        {"nombre": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio
-                        {"codigo": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial
-                        {"nombre": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial
-                        {"descripcion": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial en descripción
-                        {"marca": {"$regex": escaped_query, "$options": "i"}}  # Coincidencia parcial en marca
+                        {"codigo": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio en código (MÁS RÁPIDO)
+                        {"nombre": {"$regex": f"^{escaped_query}", "$options": "i"}},  # Coincidencia al inicio en nombre
+                        {"codigo": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial en código
+                        {"nombre": {"$regex": escaped_query, "$options": "i"}},  # Coincidencia parcial en nombre
+                        {"descripcion": {"$regex": escaped_query, "$options": "i"}},  # Último recurso: descripción
+                        {"marca": {"$regex": escaped_query, "$options": "i"}}  # Último recurso: marca
                     ]
                 }
                 print(f"🔍 [PUNTO_VENTA] Búsqueda AMPLIA (sin *): '{query_term}' - Todos los campos")
             
-            # Usar find() con proyección (más rápido)
+            # OPTIMIZACIÓN MÁXIMA: Proyección mínima (solo campos esenciales) y límite reducido
+            # Reducir límite a 30 para mejor rendimiento
             productos = await inventarios_collection.find(
                 match_stage,
                 projection={
-                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, "productoId": 1
+                    "_id": 1, "codigo": 1, "nombre": 1, 
+                    "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "farmacia": 1, "estado": 1
                 }
-            ).sort("nombre", 1).limit(50).to_list(length=50)
+            ).sort("nombre", 1).limit(30).to_list(length=30)
         
-        # Formatear resultados (procesamiento mínimo)
+        # OPTIMIZACIÓN MÁXIMA: Formateo ultra-rápido (solo campos esenciales)
+        # Reducir procesamiento al mínimo absoluto
         resultados = []
         for producto in productos:
+            precio_venta = producto.get("precio_venta") or producto.get("precio", 0)
+            cantidad = producto.get("cantidad", 0)
+            
+            # Solo campos esenciales para punto de venta
             resultado = {
                 "id": str(producto["_id"]),
                 "codigo": producto.get("codigo", ""),
                 "nombre": producto.get("nombre", ""),
-                "descripcion": producto.get("descripcion") or producto.get("nombre", ""),
-                "precio": float(producto.get("precio_venta") or producto.get("precio", 0)),
-                "cantidad": float(producto.get("cantidad", 0)),
-                "stock": float(producto.get("cantidad", 0)),
-                "lotes": producto.get("lotes", []),
+                "precio": float(precio_venta),
+                "precio_venta": float(precio_venta),
+                "cantidad": float(cantidad),
+                "stock": float(cantidad),
                 "sucursal": producto.get("farmacia", sucursal or ""),
-                "costo": float(producto.get("costo", 0)),
-                "estado": producto.get("estado", "activo"),
-                "precio_venta": float(producto.get("precio_venta") or producto.get("precio", 0))
+                "estado": producto.get("estado", "activo")
             }
-            
-            # Campos opcionales
-            if producto.get("marca"):
-                resultado["marca"] = producto["marca"]
-            if producto.get("productoId"):
-                resultado["productoId"] = str(producto["productoId"])
             
             resultados.append(resultado)
         
