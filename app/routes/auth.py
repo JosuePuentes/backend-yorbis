@@ -882,148 +882,99 @@ async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario:
 @router.get("/inventarios/{id}/items")
 async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_user)):
     """
-    Obtiene los items de inventario.
+    Obtiene los items de inventario (ULTRA OPTIMIZADO).
     El {id} puede ser el ID de la farmacia o el ID de un inventario específico.
     Si es un ID de farmacia, retorna todos los items de esa farmacia.
     Si es un ID de inventario, retorna ese item específico.
     Si el ID está vacío, retorna todos los inventarios.
+    
+    OPTIMIZACIONES APLICADAS:
+    - Proyección mínima (solo campos esenciales)
+    - Uso eficiente de índices
+    - Procesamiento rápido de resultados
+    - Límite razonable de resultados
     """
     try:
         collection = get_collection("INVENTARIOS")
         
-        # Si el ID está vacío, retornar todos los inventarios
+        # OPTIMIZACIÓN: Proyección mínima (solo campos esenciales)
+        proyeccion_minima = {
+            "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+            "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+            "farmacia": 1, "costo": 1, "estado": 1, 
+            "utilidad": 1, "porcentaje_utilidad": 1
+        }
+        
+        # Si el ID está vacío, retornar todos los inventarios (con límite)
         if not id or id.strip() == "":
-            print("🔍 [INVENTARIOS] ID vacío, retornando todos los inventarios")
-            # OPTIMIZACIÓN: Usar proyección y límite
+            print("🔍 [INVENTARIOS] ID vacío, retornando todos los inventarios (OPTIMIZADO)")
+            # OPTIMIZACIÓN MÁXIMA: Proyección mínima, solo activos, límite reducido
             inventarios = await collection.find(
-                {},
-                projection={
-                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                    "productoId": 1, "categoria": 1, "proveedor": 1,
-                    "utilidad": 1, "porcentaje_utilidad": 1
-                }
+                {"estado": {"$ne": "inactivo"}},
+                projection=proyeccion_minima
             ).sort("nombre", 1).limit(500).to_list(length=500)
-            for inv in inventarios:
-                inv["_id"] = str(inv["_id"])
-                if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
-                    inv["productoId"] = str(inv["productoId"])
-                
-                # Calcular utilidad si no existe
-                costo = float(inv.get("costo", 0))
-                precio_venta = float(inv.get("precio_venta", 0))
-                
-                if costo > 0:
-                    if not precio_venta or precio_venta == 0:
-                        precio_venta = costo / 0.60
-                        inv["precio_venta"] = round(precio_venta, 2)
-                    
-                    if "utilidad" not in inv or not inv.get("utilidad"):
-                        utilidad = precio_venta - costo
-                        inv["utilidad"] = round(utilidad, 2)
-                        inv["porcentaje_utilidad"] = 40.0
-                    elif "porcentaje_utilidad" not in inv:
-                        inv["porcentaje_utilidad"] = 40.0
-            
-            return inventarios
+        else:
+            # Intentar primero como ObjectId (inventario específico) - MÁS RÁPIDO
+            try:
+                object_id = ObjectId(id)
+                inventario = await collection.find_one(
+                    {"_id": object_id, "estado": {"$ne": "inactivo"}},
+                    projection=proyeccion_minima
+                )
+                if inventario:
+                    inventarios = [inventario]
+                else:
+                    inventarios = []
+            except (InvalidId, ValueError):
+                # Si no es un ObjectId válido, tratar como ID de farmacia
+                # OPTIMIZACIÓN: Buscar directamente por farmacia (usa índice)
+                inventarios = await collection.find(
+                    {"farmacia": id.strip(), "estado": {"$ne": "inactivo"}},
+                    projection=proyeccion_minima
+                ).sort("nombre", 1).limit(500).to_list(length=500)
         
-        # Intentar primero como ObjectId (inventario específico)
-        try:
-            object_id = ObjectId(id)
-            inventario = await collection.find_one(
-                {"_id": object_id},
-                projection={
-                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                    "productoId": 1, "categoria": 1, "proveedor": 1,
-                    "utilidad": 1, "porcentaje_utilidad": 1
-                }
-            )
-            if inventario:
-                inventario["_id"] = str(inventario["_id"])
-                if "productoId" in inventario and isinstance(inventario["productoId"], ObjectId):
-                    inventario["productoId"] = str(inventario["productoId"])
-                
-                # Calcular utilidad si no existe
-                costo = float(inventario.get("costo", 0))
-                precio_venta = float(inventario.get("precio_venta", 0))
-                
-                if costo > 0:
-                    if not precio_venta or precio_venta == 0:
-                        precio_venta = costo / 0.60
-                        inventario["precio_venta"] = round(precio_venta, 2)
-                    
-                    if "utilidad" not in inventario or not inventario.get("utilidad"):
-                        utilidad = precio_venta - costo
-                        inventario["utilidad"] = round(utilidad, 2)
-                        inventario["porcentaje_utilidad"] = 40.0
-                    elif "porcentaje_utilidad" not in inventario:
-                        inventario["porcentaje_utilidad"] = 40.0
-                
-                return [inventario]  # Retornar como lista para consistencia
-        except (InvalidId, ValueError):
-            # Si no es un ObjectId válido, tratar como ID de farmacia
-            pass
-        
-        # OPTIMIZACIÓN: Buscar por farmacia con proyección y límite
-        inventarios = await collection.find(
-            {"farmacia": id},
-            projection={
-                "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-                "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                "productoId": 1, "categoria": 1, "proveedor": 1,
-                "utilidad": 1, "porcentaje_utilidad": 1
-            }
-        ).sort("nombre", 1).limit(500).to_list(length=500)
-        
-        # Si no se encontró nada, intentar buscar por cualquier campo que contenga el ID
-        if len(inventarios) == 0:
-            # Buscar en todos los campos posibles
-            inventarios = await collection.find(
-                {
-                    "$or": [
-                        {"farmacia": id},
-                        {"_id": id},
-                        {"productoId": id}
-                    ]
-                },
-                projection={
-                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-                    "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
-                    "lotes": 1, "farmacia": 1, "costo": 1, "estado": 1, 
-                    "productoId": 1, "categoria": 1, "proveedor": 1,
-                    "utilidad": 1, "porcentaje_utilidad": 1
-                }
-            ).limit(500).to_list(length=500)
-        
-        # Convertir _id a string y calcular utilidad si no existe
+        # OPTIMIZACIÓN: Procesamiento rápido y mínimo
+        resultados = []
         for inv in inventarios:
-            inv["_id"] = str(inv["_id"])
-            if "productoId" in inv and isinstance(inv["productoId"], ObjectId):
-                inv["productoId"] = str(inv["productoId"])
+            # Convertir _id a string
+            inv_id = str(inv["_id"])
             
-            # Calcular utilidad si no existe
+            # Calcular valores si no existen (procesamiento mínimo)
             costo = float(inv.get("costo", 0))
-            precio_venta = float(inv.get("precio_venta", 0))
+            precio_venta = float(inv.get("precio_venta") or inv.get("precio", 0))
             
-            if costo > 0:
-                if not precio_venta or precio_venta == 0:
-                    precio_venta = costo / 0.60
-                    inv["precio_venta"] = round(precio_venta, 2)
-                
-                if "utilidad" not in inv or not inv.get("utilidad"):
-                    utilidad = precio_venta - costo
-                    inv["utilidad"] = round(utilidad, 2)
-                    inv["porcentaje_utilidad"] = 40.0
-                elif "porcentaje_utilidad" not in inv:
-                    inv["porcentaje_utilidad"] = 40.0
+            # Calcular precio_venta y utilidad si no están definidos
+            if costo > 0 and (precio_venta == 0 or "precio_venta" not in inv):
+                precio_venta = costo / 0.60  # 40% de utilidad
+            
+            utilidad = precio_venta - costo if precio_venta > 0 and costo > 0 else float(inv.get("utilidad", 0))
+            porcentaje_utilidad = float(inv.get("porcentaje_utilidad", 40.0)) if utilidad > 0 else 0.0
+            
+            # Construir resultado optimizado
+            resultado = {
+                "_id": inv_id,
+                "id": inv_id,
+                "codigo": inv.get("codigo", ""),
+                "nombre": inv.get("nombre", ""),
+                "descripcion": inv.get("descripcion", ""),
+                "marca": inv.get("marca", ""),
+                "cantidad": float(inv.get("cantidad", 0)),
+                "costo": round(costo, 2),
+                "precio_venta": round(precio_venta, 2),
+                "precio": round(precio_venta, 2),
+                "utilidad": round(utilidad, 2),
+                "porcentaje_utilidad": round(porcentaje_utilidad, 2),
+                "farmacia": inv.get("farmacia", ""),
+                "estado": inv.get("estado", "activo")
+            }
+            
+            resultados.append(resultado)
         
-        return inventarios
+        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (OPTIMIZADO)")
+        return resultados
+        
     except Exception as e:
-        print(f"❌ Error obteniendo items de inventario: {e}")
+        print(f"❌ [INVENTARIOS] Error obteniendo items: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1144,6 +1095,7 @@ async def eliminar_item_inventario(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/inventarios/{id}/items/{item_id}")
+@router.patch("/inventarios/{id}/items/{item_id}")
 async def actualizar_item_inventario(
     id: str,
     item_id: str,
@@ -1152,11 +1104,13 @@ async def actualizar_item_inventario(
 ):
     """
     Actualiza un item de inventario.
-    El {id} es el ID de la farmacia o inventario padre.
+    El {id} es el ID de la farmacia o inventario padre (puede estar vacío).
     El {item_id} es el ID del item a actualizar.
     """
     try:
-        print(f"✏️ [INVENTARIOS] Actualizando item: {item_id} de inventario: {id}")
+        # Manejar caso cuando id está vacío (doble barra //)
+        id_clean = id.strip() if id else ""
+        print(f"✏️ [INVENTARIOS] Actualizando item: {item_id} de inventario: '{id_clean}' (vacío: {not id_clean})")
         collection = get_collection("INVENTARIOS")
         
         # El item_id puede venir en formato "id_codigo" o solo "id"
@@ -1169,12 +1123,12 @@ async def actualizar_item_inventario(
             if "_" in item_id:
                 codigo = "_".join(item_id.split("_")[1:])
                 filtro = {"codigo": codigo}
-                if id and id.strip():
-                    filtro["farmacia"] = id.strip()
+                if id_clean:
+                    filtro["farmacia"] = id_clean
             else:
                 filtro = {"codigo": item_id}
-                if id and id.strip():
-                    filtro["farmacia"] = id.strip()
+                if id_clean:
+                    filtro["farmacia"] = id_clean
             
             # Buscar el item
             item = await collection.find_one(filtro)
