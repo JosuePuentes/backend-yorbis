@@ -33,30 +33,21 @@ class URLNormalizeMiddleware(BaseHTTPMiddleware):
         # Obtener la URL original
         path = request.url.path
         
-        # Normalizar: eliminar dobles barras (excepto después de http:// o https://)
-        # Reemplazar // con / excepto al inicio
+        # Normalizar: eliminar dobles barras
         normalized_path = re.sub(r'/+', '/', path)
         # Asegurar que no termine con / (excepto si es solo /)
         if normalized_path != '/' and normalized_path.endswith('/'):
             normalized_path = normalized_path.rstrip('/')
         
-        # Si la URL cambió, redirigir internamente
+        # Si la URL cambió, actualizar el scope del request
         if normalized_path != path:
             print(f"🔄 [MIDDLEWARE] Normalizando URL: {path} -> {normalized_path}")
-            # Construir nueva URL con query string si existe
-            new_url = normalized_path
-            if request.url.query:
-                new_url = f"{normalized_path}?{request.url.query}"
-            
-            # Crear un nuevo request con la URL normalizada
-            scope = dict(request.scope)
-            scope["path"] = normalized_path
-            scope["raw_path"] = normalized_path.encode()
-            
-            # Crear nuevo request
-            new_request = Request(scope, request.receive)
-            response = await call_next(new_request)
-            return response
+            # Actualizar el scope del request original
+            request.scope["path"] = normalized_path
+            request.scope["raw_path"] = normalized_path.encode()
+            # Actualizar también el path_info si existe
+            if "path_info" in request.scope:
+                request.scope["path_info"] = normalized_path
         
         response = await call_next(request)
         return response
