@@ -1172,6 +1172,9 @@ async def _actualizar_item_inventario_internal(
     """
     collection = get_collection("INVENTARIOS")
     
+    # DEBUG: Log de datos recibidos
+    print(f"📝 [INVENTARIOS] Datos recibidos para actualizar item {item_id}: {data}")
+    
     # El item_id puede venir en formato "id_codigo" o solo "id"
     item_id_real = item_id.split("_")[0] if "_" in item_id else item_id
     
@@ -1208,6 +1211,8 @@ async def _actualizar_item_inventario_internal(
     costo_actual = float(item_actual.get("costo", 0)) if item_actual else 0
     precio_venta_actual = float(item_actual.get("precio_venta", 0)) if item_actual else 0
     
+    print(f"📊 [INVENTARIOS] Valores actuales - Costo: {costo_actual}, Precio venta: {precio_venta_actual}")
+    
     # Si se actualiza el costo, recalcular precio_venta y utilidad con 40%
     if "costo" in data:
         nuevo_costo = float(data["costo"])
@@ -1228,12 +1233,16 @@ async def _actualizar_item_inventario_internal(
     # Si solo se actualiza precio_venta (sin costo), recalcular utilidad
     elif "precio_venta" in data and "costo" not in data:
         nuevo_precio_venta = float(data["precio_venta"])
+        print(f"💰 [INVENTARIOS] Actualizando precio_venta: {precio_venta_actual} -> {nuevo_precio_venta}")
         if costo_actual > 0:
             data["utilidad"] = round(nuevo_precio_venta - costo_actual, 2)
             data["porcentaje_utilidad"] = round((data["utilidad"] / costo_actual) * 100, 2)
         else:
             data["utilidad"] = 0.0
             data["porcentaje_utilidad"] = 0.0
+        # Asegurar que también se actualice el campo "precio" si existe
+        if "precio" not in data:
+            data["precio"] = nuevo_precio_venta
     
     # Si no se actualiza ni costo ni precio_venta, pero faltan campos de utilidad, calcularlos
     elif "costo" not in data and "precio_venta" not in data:
@@ -1253,6 +1262,9 @@ async def _actualizar_item_inventario_internal(
     data["usuarioActualizacion"] = usuario.get("correo", "unknown")
     data["fechaActualizacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
+    # DEBUG: Log de datos que se van a guardar
+    print(f"💾 [INVENTARIOS] Guardando datos: {data}")
+    
     resultado = await collection.update_one(
         {"_id": item_object_id},
         {"$set": data}
@@ -1260,6 +1272,8 @@ async def _actualizar_item_inventario_internal(
     
     if resultado.modified_count == 0:
         raise HTTPException(status_code=404, detail="Item de inventario no encontrado o sin cambios")
+    
+    print(f"✅ [INVENTARIOS] Item actualizado exitosamente. Modified count: {resultado.modified_count}")
     
     # Obtener el item actualizado
     item_actualizado = await collection.find_one({"_id": item_object_id})
