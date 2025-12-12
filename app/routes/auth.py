@@ -903,12 +903,12 @@ async def obtener_items_inventario_sin_id(usuario: dict = Depends(get_current_us
             "utilidad": 1, "porcentaje_utilidad": 1
         }
         
-        print("🔍 [INVENTARIOS] Obteniendo todos los items (sin ID - OPTIMIZADO)")
-        # OPTIMIZACIÓN MÁXIMA: Proyección mínima, solo activos, límite reducido
+        print("🔍 [INVENTARIOS] Obteniendo todos los items (sin ID - ULTRA OPTIMIZADO)")
+        # OPTIMIZACIÓN MÁXIMA: Proyección mínima, solo activos, límite reducido a 200
         inventarios = await collection.find(
             {"estado": {"$ne": "inactivo"}},
             projection=proyeccion_minima
-        ).sort("nombre", 1).limit(300).to_list(length=300)  # Reducido a 300 para mejor rendimiento
+        ).sort("nombre", 1).limit(200).to_list(length=200)  # Reducido a 200 para mejor rendimiento
         
         # OPTIMIZACIÓN: Procesamiento rápido y mínimo
         resultados = []
@@ -998,7 +998,7 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
             inventarios = await collection.find(
                 {"farmacia": id.strip(), "estado": {"$ne": "inactivo"}},
                 projection=proyeccion_minima
-            ).sort("nombre", 1).limit(300).to_list(length=300)  # Reducido a 300 para mejor rendimiento
+            ).sort("nombre", 1).limit(200).to_list(length=200)  # Reducido a 200 para mejor rendimiento
         
         # OPTIMIZACIÓN: Procesamiento rápido y mínimo
         resultados = []
@@ -1340,6 +1340,192 @@ async def actualizar_item_inventario(
         raise
     except Exception as e:
         print(f"❌ [INVENTARIOS] Error actualizando item: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/inventarios/cargar-existencia")
+async def cargar_existencia_masiva(
+    datos_carga: dict = Body(...),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Carga existencia masiva al inventario.
+    Suma las cantidades a los productos existentes (no reemplaza).
+    Permite cargar múltiples productos a la vez.
+    
+    Body:
+    {
+      "farmacia": "01",  // ID de la farmacia (requerido)
+      "productos": [     // Array de productos a cargar
+        {
+          "producto_id": "id_del_producto",  // ID del producto en inventario
+          "cantidad": 10,                     // Cantidad a sumar
+          "costo": 100.00,                    // Costo unitario (opcional, usa el actual si no se envía)
+          "utilidad": 66.67,                  // Utilidad en dinero (opcional)
+          "porcentaje_utilidad": 40.0,        // Porcentaje de utilidad (opcional, default 40%)
+          "precio_venta": 166.67              // Precio de venta (opcional, se calcula si no se envía)
+        }
+      ]
+    }
+    
+    Response:
+    {
+      "message": "Existencia cargada exitosamente",
+      "productos_procesados": 5,
+      "productos_exitosos": 5,
+      "productos_con_error": 0,
+      "detalle": {
+        "exitosos": [...],
+        "errores": [...]
+      }
+    }
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        usuario_correo = usuario.get("correo", "unknown")
+        
+        # Validar datos
+        farmacia = datos_carga.get("farmacia")
+        if not farmacia:
+            raise HTTPException(status_code=400, detail="El campo 'farmacia' es requerido")
+        
+        productos = datos_carga.get("productos", [])
+        if not productos or len(productos) == 0:
+            raise HTTPException(status_code=400, detail="Debe enviar al menos un producto")
+        
+        print(f"📦 [INVENTARIOS] Cargando existencia masiva: {len(productos)} productos en farmacia {farmacia}")
+        
+        venezuela_tz = pytz.timezone("America/Caracas")
+        now_ve = datetime.now(venezuela_tz)
+        fecha_actual = now_ve.strftime("%Y-%m-%d")
+        
+        productos_exitosos = []
+        productos_con_error = []
+        
+        # Procesar cada producto
+        for producto_carga in productos:
+            try:
+                producto_id = producto_carga.get("producto_id")
+                if not producto_id:
+                    raise ValueError("El campo 'producto_id' es requerido")
+                
+                cantidad_a_sumar = float(producto_carga.get("cantidad", 0))
+                if cantidad_a_sumar <= 0:
+                    raise ValueError("La cantidad debe ser mayor a 0")
+                
+                # Buscar el producto en el inventario
+                try:
+                    producto_object_id = ObjectId(producto_id)
+                except (InvalidId, ValueError):
+                    raise ValueError(f"ID de producto inválido: {producto_id}")
+                
+                producto_actual = await collection.find_one({"_id": producto_object_id})
+                if not producto_actual:
+                    raise ValueError(f"Producto no encontrado: {producto_id}")
+                
+                # Verificar que pertenece a la farmacia correcta
+                if producto_actual.get("farmacia") != farmacia:
+                    raise ValueError(f"El producto no pertenece a la farmacia {farmacia}")
+                
+                # Obtener valores actuales
+                cantidad_actual = float(producto_actual.get("cantidad", 0))
+                costo_actual = float(producto_actual.get("costo", 0))
+                
+                # Calcular nueva cantidad (SUMAR, no reemplazar)
+                cantidad_nueva = cantidad_actual + cantidad_a_sumar
+                
+                # Obtener nuevo costo (si viene en la carga, usarlo; sino usar el actual)
+                nuevo_costo_unitario = float(producto_carga.get("costo", costo_actual))
+                if nuevo_costo_unitario <= 0:
+                    nuevo_costo_unitario = costo_actual
+                
+                # Calcular costo promedio ponderado
+                if cantidad_actual > 0 and nuevo_costo_unitario != costo_actual:
+                    costo_total_actual = cantidad_actual * costo_actual
+                    costo_total_nuevo = cantidad_a_sumar * nuevo_costo_unitario
+                    costo_promedio = (costo_total_actual + costo_total_nuevo) / cantidad_nueva
+                else:
+                    costo_promedio = nuevo_costo_unitario if nuevo_costo_unitario > 0 else costo_actual
+                
+                # Calcular precio_venta y utilidad
+                precio_venta_enviado = producto_carga.get("precio_venta")
+                utilidad_enviada = producto_carga.get("utilidad")
+                porcentaje_utilidad_enviado = producto_carga.get("porcentaje_utilidad", 40.0)
+                
+                if precio_venta_enviado and precio_venta_enviado > 0:
+                    # Si viene precio_venta explícito, usarlo
+                    precio_venta_final = float(precio_venta_enviado)
+                    if utilidad_enviada is not None:
+                        utilidad_final = float(utilidad_enviada)
+                    else:
+                        utilidad_final = precio_venta_final - costo_promedio
+                    porcentaje_utilidad_final = porcentaje_utilidad_enviado
+                elif utilidad_enviada is not None and utilidad_enviada > 0:
+                    # Si viene utilidad, calcular precio_venta
+                    utilidad_final = float(utilidad_enviada)
+                    precio_venta_final = costo_promedio + utilidad_final
+                    porcentaje_utilidad_final = (utilidad_final / costo_promedio) * 100 if costo_promedio > 0 else 0
+                else:
+                    # Calcular automáticamente con porcentaje de utilidad (default 40%)
+                    porcentaje_utilidad_final = float(porcentaje_utilidad_enviado)
+                    precio_venta_final = costo_promedio / (1 - (porcentaje_utilidad_final / 100))
+                    utilidad_final = precio_venta_final - costo_promedio
+                
+                # Actualizar inventario
+                update_data = {
+                    "cantidad": cantidad_nueva,
+                    "costo": round(costo_promedio, 2),
+                    "precio_venta": round(precio_venta_final, 2),
+                    "precio": round(precio_venta_final, 2),
+                    "utilidad": round(utilidad_final, 2),
+                    "porcentaje_utilidad": round(porcentaje_utilidad_final, 2),
+                    "fechaActualizacion": fecha_actual,
+                    "usuarioActualizacion": usuario_correo
+                }
+                
+                await collection.update_one(
+                    {"_id": producto_object_id},
+                    {"$set": update_data}
+                )
+                
+                productos_exitosos.append({
+                    "producto_id": producto_id,
+                    "nombre": producto_actual.get("nombre", ""),
+                    "cantidad_anterior": cantidad_actual,
+                    "cantidad_suma": cantidad_a_sumar,
+                    "cantidad_nueva": cantidad_nueva,
+                    "costo": round(costo_promedio, 2),
+                    "precio_venta": round(precio_venta_final, 2)
+                })
+                
+                print(f"✅ [INVENTARIOS] Existencia cargada: {producto_actual.get('nombre', '')} - {cantidad_actual} + {cantidad_a_sumar} = {cantidad_nueva}")
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"❌ [INVENTARIOS] Error cargando existencia para producto {producto_carga.get('producto_id', 'unknown')}: {error_msg}")
+                productos_con_error.append({
+                    "producto_id": producto_carga.get("producto_id", "unknown"),
+                    "error": error_msg
+                })
+        
+        print(f"✅ [INVENTARIOS] Carga masiva completada: {len(productos_exitosos)} exitosos, {len(productos_con_error)} con error")
+        
+        return {
+            "message": "Existencia cargada exitosamente",
+            "productos_procesados": len(productos),
+            "productos_exitosos": len(productos_exitosos),
+            "productos_con_error": len(productos_con_error),
+            "detalle": {
+                "exitosos": productos_exitosos,
+                "errores": productos_con_error
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error en carga masiva: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
