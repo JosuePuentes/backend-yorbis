@@ -978,15 +978,9 @@ async def obtener_items_inventario_sin_id(
         
         print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (PAGINADO - sin ID) - Total: {total_count}")
         
-        response = {
-            "productos": resultados,
-            "total": total_count,
-            "limit": limit_val,
-            "skip": skip_val,
-            "has_more": len(resultados) == limit_val
-        }
-        
-        return response
+        # IMPORTANTE: Retornar array directo para compatibilidad con frontend
+        # Si el frontend necesita paginación, puede usar los parámetros limit y skip
+        return resultados
         
     except Exception as e:
         print(f"❌ [INVENTARIOS] Error obteniendo items: {e}")
@@ -1095,15 +1089,8 @@ async def obtener_items_inventario(
         
         print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (PAGINADO - con ID) - Total: {total_count}")
         
-        response = {
-            "productos": resultados,
-            "total": total_count,
-            "limit": limit_val,
-            "skip": skip_val,
-            "has_more": len(resultados) == limit_val
-        }
-        
-        return response
+        # IMPORTANTE: Retornar array directo para compatibilidad con frontend
+        return resultados
         
     except Exception as e:
         print(f"❌ [INVENTARIOS] Error obteniendo items: {e}")
@@ -1696,12 +1683,18 @@ async def crear_producto_inventario(
             nuevo_producto["codigo"] = codigo.upper()
         
         # Insertar en la base de datos
+        print(f"📝 [INVENTARIOS] Insertando producto: {nombre} en farmacia {farmacia}")
         result = await collection.insert_one(nuevo_producto)
         producto_id = str(result.inserted_id)
+        print(f"✅ [INVENTARIOS] Producto insertado con ID: {producto_id}")
         
-        # Obtener el producto creado para retornarlo
+        # Obtener el producto creado para retornarlo (consultar directamente de BD)
         producto_creado = await collection.find_one({"_id": result.inserted_id})
+        if not producto_creado:
+            raise HTTPException(status_code=500, detail="Error: Producto creado pero no se pudo recuperar")
+        
         producto_creado["_id"] = producto_id
+        print(f"✅ [INVENTARIOS] Producto recuperado de BD: {producto_creado.get('nombre', 'N/A')}")
         
         # Formatear respuesta
         producto_formateado = {
