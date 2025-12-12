@@ -882,16 +882,28 @@ async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario:
 
 # IMPORTANTE: Ruta específica sin ID debe ir ANTES de la ruta con {id}
 @router.get("/inventarios/items")
-async def obtener_items_inventario_sin_id(usuario: dict = Depends(get_current_user)):
+async def obtener_items_inventario_sin_id(
+    farmacia: Optional[str] = Query(None, description="Filtrar por farmacia"),
+    limit: Optional[int] = Query(50, description="Límite de resultados (máximo 100, por defecto 50)"),
+    skip: Optional[int] = Query(0, description="Número de resultados a saltar (para paginación)"),
+    usuario: dict = Depends(get_current_user)
+):
     """
-    Obtiene todos los items de inventario sin especificar ID de farmacia (ULTRA OPTIMIZADO).
+    Obtiene items de inventario sin especificar ID de farmacia (ULTRA OPTIMIZADO CON PAGINACIÓN).
     Ruta específica para cuando el frontend llama /inventarios/items (después de normalización).
     
     OPTIMIZACIONES APLICADAS:
     - Proyección mínima (solo campos esenciales)
     - Solo productos activos
-    - Límite reducido para mejor rendimiento
-    - Procesamiento rápido
+    - Paginación (limit y skip)
+    - Límite inicial reducido a 50 para carga rápida
+    - Usa índice en estado + nombre para ordenamiento rápido
+    - Procesamiento mínimo
+    
+    Parámetros:
+    - farmacia: ID de la farmacia (opcional)
+    - limit: Límite de resultados (máximo 100, por defecto 50)
+    - skip: Número de resultados a saltar (para paginación, por defecto 0)
     """
     try:
         collection = get_collection("INVENTARIOS")
@@ -904,12 +916,23 @@ async def obtener_items_inventario_sin_id(usuario: dict = Depends(get_current_us
             "utilidad": 1, "porcentaje_utilidad": 1
         }
         
-        print("🔍 [INVENTARIOS] Obteniendo todos los items (sin ID - ULTRA OPTIMIZADO)")
-        # OPTIMIZACIÓN MÁXIMA: Proyección mínima, solo activos, límite reducido a 200
+        # Construir filtro
+        filtro = {"estado": {"$ne": "inactivo"}}
+        if farmacia and farmacia.strip():
+            filtro["farmacia"] = farmacia.strip()
+        
+        # Limitar el límite a máximo 100 para velocidad
+        limit_val = min(limit or 50, 100)
+        skip_val = max(skip or 0, 0)
+        
+        print(f"🔍 [INVENTARIOS] Obteniendo items (sin ID - PAGINADO) - limit: {limit_val}, skip: {skip_val}, farmacia: {farmacia}")
+        
+        # OPTIMIZACIÓN MÁXIMA: Proyección mínima, solo activos, paginación, límite reducido
+        # Usa índice en estado + nombre para ordenamiento rápido
         inventarios = await collection.find(
-            {"estado": {"$ne": "inactivo"}},
+            filtro,
             projection=proyeccion_minima
-        ).sort("nombre", 1).limit(200).to_list(length=200)  # Reducido a 200 para mejor rendimiento
+        ).sort("nombre", 1).skip(skip_val).limit(limit_val).to_list(length=limit_val)
         
         # OPTIMIZACIÓN: Procesamiento rápido y mínimo
         resultados = []
@@ -948,8 +971,22 @@ async def obtener_items_inventario_sin_id(usuario: dict = Depends(get_current_us
             
             resultados.append(resultado)
         
-        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (OPTIMIZADO - sin ID)")
-        return resultados
+        # Contar total de productos (solo si es la primera página para no ralentizar)
+        total_count = None
+        if skip_val == 0:
+            total_count = await collection.count_documents(filtro)
+        
+        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (PAGINADO - sin ID) - Total: {total_count}")
+        
+        response = {
+            "productos": resultados,
+            "total": total_count,
+            "limit": limit_val,
+            "skip": skip_val,
+            "has_more": len(resultados) == limit_val
+        }
+        
+        return response
         
     except Exception as e:
         print(f"❌ [INVENTARIOS] Error obteniendo items: {e}")
@@ -958,18 +995,24 @@ async def obtener_items_inventario_sin_id(usuario: dict = Depends(get_current_us
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/inventarios/{id}/items")
-async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_user)):
+async def obtener_items_inventario(
+    id: str,
+    limit: Optional[int] = Query(50, description="Límite de resultados (máximo 100, por defecto 50)"),
+    skip: Optional[int] = Query(0, description="Número de resultados a saltar (para paginación)"),
+    usuario: dict = Depends(get_current_user)
+):
     """
-    Obtiene los items de inventario (ULTRA OPTIMIZADO).
+    Obtiene los items de inventario (ULTRA OPTIMIZADO CON PAGINACIÓN).
     El {id} puede ser el ID de la farmacia o el ID de un inventario específico.
     Si es un ID de farmacia, retorna todos los items de esa farmacia.
     Si es un ID de inventario, retorna ese item específico.
     
     OPTIMIZACIONES APLICADAS:
     - Proyección mínima (solo campos esenciales)
+    - Paginación (limit y skip)
     - Uso eficiente de índices
     - Procesamiento rápido de resultados
-    - Límite razonable de resultados
+    - Límite inicial reducido a 50 para carga rápida
     """
     try:
         collection = get_collection("INVENTARIOS")
@@ -981,6 +1024,10 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
             "farmacia": 1, "costo": 1, "estado": 1, 
             "utilidad": 1, "porcentaje_utilidad": 1
         }
+        
+        # Limitar el límite a máximo 100 para velocidad
+        limit_val = min(limit or 50, 100)
+        skip_val = max(skip or 0, 0)
         
         # Intentar primero como ObjectId (inventario específico) - MÁS RÁPIDO
         try:
@@ -995,11 +1042,11 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
                 inventarios = []
         except (InvalidId, ValueError):
             # Si no es un ObjectId válido, tratar como ID de farmacia
-            # OPTIMIZACIÓN: Buscar directamente por farmacia (usa índice)
+            # OPTIMIZACIÓN: Buscar directamente por farmacia (usa índice) con paginación
             inventarios = await collection.find(
                 {"farmacia": id.strip(), "estado": {"$ne": "inactivo"}},
                 projection=proyeccion_minima
-            ).sort("nombre", 1).limit(200).to_list(length=200)  # Reducido a 200 para mejor rendimiento
+            ).sort("nombre", 1).skip(skip_val).limit(limit_val).to_list(length=limit_val)
         
         # OPTIMIZACIÓN: Procesamiento rápido y mínimo
         resultados = []
@@ -1038,8 +1085,25 @@ async def obtener_items_inventario(id: str, usuario: dict = Depends(get_current_
             
             resultados.append(resultado)
         
-        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (OPTIMIZADO)")
-        return resultados
+        # Contar total de productos (solo si es la primera página y es farmacia)
+        total_count = None
+        try:
+            ObjectId(id)  # Si es ObjectId, no contar
+        except (InvalidId, ValueError):
+            if skip_val == 0:
+                total_count = await collection.count_documents({"farmacia": id.strip(), "estado": {"$ne": "inactivo"}})
+        
+        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (PAGINADO - con ID) - Total: {total_count}")
+        
+        response = {
+            "productos": resultados,
+            "total": total_count,
+            "limit": limit_val,
+            "skip": skip_val,
+            "has_more": len(resultados) == limit_val
+        }
+        
+        return response
         
     except Exception as e:
         print(f"❌ [INVENTARIOS] Error obteniendo items: {e}")
@@ -1395,6 +1459,7 @@ async def buscar_productos_inventario_modal(
             filtro["farmacia"] = farmacia.strip()
         
         # PROYECCIÓN MÍNIMA (solo campos esenciales para el modal)
+        # IMPORTANTE: Incluir "cantidad" para mostrar existencia actualizada
         proyeccion_minima = {
             "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
             "cantidad": 1, "costo": 1, "precio_venta": 1, "precio": 1,
@@ -1402,11 +1467,21 @@ async def buscar_productos_inventario_modal(
         }
         
         # OPTIMIZACIÓN 1: Búsqueda exacta por código primero (MUY RÁPIDA con índice)
+        # IMPORTANTE: Consultar directamente de la BD sin caché para obtener datos actualizados
         codigo_filtro = {**filtro, "codigo": query_term.upper()}
         producto_exacto = await collection.find_one(
             codigo_filtro,
             projection=proyeccion_minima
         )
+        
+        # Si no encontramos por código exacto, buscar por nombre/descripción
+        if not producto_exacto:
+            # Buscar también por nombre exacto (sin regex para más velocidad)
+            nombre_filtro = {**filtro, "nombre": {"$regex": f"^{re.escape(query_term)}", "$options": "i"}}
+            producto_exacto = await collection.find_one(
+                nombre_filtro,
+                projection=proyeccion_minima
+            )
         
         resultados = []
         
@@ -1421,6 +1496,9 @@ async def buscar_productos_inventario_modal(
             utilidad = precio_venta - costo if precio_venta > 0 and costo > 0 else float(producto_exacto.get("utilidad", 0))
             porcentaje_utilidad = float(producto_exacto.get("porcentaje_utilidad", 40.0)) if utilidad > 0 else 0.0
             
+            # IMPORTANTE: Obtener cantidad directamente de la BD (sin redondeo para mostrar valor exacto)
+            cantidad_actual_exacto = float(producto_exacto.get("cantidad", 0))
+            
             resultados.append({
                 "id": producto_exacto["_id"],
                 "_id": producto_exacto["_id"],
@@ -1428,7 +1506,7 @@ async def buscar_productos_inventario_modal(
                 "nombre": producto_exacto.get("nombre", ""),
                 "descripcion": producto_exacto.get("descripcion", ""),
                 "marca": producto_exacto.get("marca", ""),
-                "cantidad": float(producto_exacto.get("cantidad", 0)),
+                "cantidad": cantidad_actual_exacto,  # Valor exacto sin redondeo
                 "costo": round(costo, 2),
                 "precio_venta": round(precio_venta, 2),
                 "precio": round(precio_venta, 2),
@@ -1437,29 +1515,27 @@ async def buscar_productos_inventario_modal(
                 "farmacia": producto_exacto.get("farmacia", "")
             })
         
-        # OPTIMIZACIÓN 2: Búsqueda por prefijo en código y nombre (usa índices)
+        # OPTIMIZACIÓN 2: Búsqueda por término en nombre y descripción (SOLO busca el término específico)
         # Solo si no encontramos coincidencia exacta o queremos más resultados
         if len(resultados) < limit:
-            # Crear regex para búsqueda por prefijo (más rápida que búsqueda parcial)
-            # También buscar coincidencias parciales si el término tiene espacios
-            query_upper = query_term.upper()
-            query_lower = query_term.lower()
+            # Escapar caracteres especiales del término de búsqueda
+            query_escaped = re.escape(query_term)
             
+            # Buscar SOLO productos que contengan el término (no todos los productos)
             busqueda_filtro = {
                 **filtro,
                 "$or": [
-                    {"codigo": {"$regex": f"^{re.escape(query_upper)}", "$options": "i"}},
-                    {"nombre": {"$regex": f"^{re.escape(query_term)}", "$options": "i"}},
-                    {"nombre": {"$regex": re.escape(query_term), "$options": "i"}},
-                    {"descripcion": {"$regex": re.escape(query_term), "$options": "i"}}
+                    {"codigo": {"$regex": query_escaped, "$options": "i"}},
+                    {"nombre": {"$regex": query_escaped, "$options": "i"}},
+                    {"descripcion": {"$regex": query_escaped, "$options": "i"}}
                 ]
             }
             
             # Excluir el producto exacto si ya lo agregamos
             if producto_exacto:
-                busqueda_filtro["_id"] = {"$ne": producto_exacto["_id"]}
+                busqueda_filtro["_id"] = {"$ne": ObjectId(producto_exacto["_id"])}
             
-            # Buscar con límite reducido
+            # Buscar con límite reducido - SOLO productos que coincidan con el término
             productos_busqueda = await collection.find(
                 busqueda_filtro,
                 projection=proyeccion_minima
@@ -1475,6 +1551,9 @@ async def buscar_productos_inventario_modal(
                 utilidad = precio_venta - costo if precio_venta > 0 and costo > 0 else float(inv.get("utilidad", 0))
                 porcentaje_utilidad = float(inv.get("porcentaje_utilidad", 40.0)) if utilidad > 0 else 0.0
                 
+                # IMPORTANTE: Obtener cantidad directamente de la BD (sin redondeo para mostrar valor exacto)
+                cantidad_actual = float(inv.get("cantidad", 0))
+                
                 resultados.append({
                     "id": inv_id,
                     "_id": inv_id,
@@ -1482,7 +1561,7 @@ async def buscar_productos_inventario_modal(
                     "nombre": inv.get("nombre", ""),
                     "descripcion": inv.get("descripcion", ""),
                     "marca": inv.get("marca", ""),
-                    "cantidad": float(inv.get("cantidad", 0)),
+                    "cantidad": cantidad_actual,  # Valor exacto sin redondeo
                     "costo": round(costo, 2),
                     "precio_venta": round(precio_venta, 2),
                     "precio": round(precio_venta, 2),
