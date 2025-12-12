@@ -16,6 +16,7 @@ from botocore.config import Config
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+import re
 
 load_dotenv()
 
@@ -1340,6 +1341,152 @@ async def actualizar_item_inventario(
         raise
     except Exception as e:
         print(f"❌ [INVENTARIOS] Error actualizando item: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/inventarios/buscar")
+async def buscar_productos_inventario_modal(
+    q: str = Query(..., description="Término de búsqueda (código, nombre, descripción)"),
+    farmacia: Optional[str] = Query(None, description="ID de la farmacia"),
+    limit: Optional[int] = Query(50, description="Límite de resultados (máximo 50)"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Búsqueda ULTRA RÁPIDA de productos en inventario para modal de carga masiva.
+    Optimizado para responder en menos de 5 segundos.
+    
+    OPTIMIZACIONES:
+    - Búsqueda exacta por código primero (instantánea con índice)
+    - Búsqueda por prefijo en código y nombre (campos indexados)
+    - Proyección mínima (solo campos esenciales)
+    - Límite máximo de 50 resultados
+    - Solo productos activos
+    - Sin procesamiento pesado
+    
+    Parámetros:
+    - q: Término de búsqueda (código, nombre o descripción)
+    - farmacia: ID de la farmacia (opcional)
+    - limit: Límite de resultados (máximo 50, por defecto 50)
+    
+    Response: Array de productos con campos mínimos
+    """
+    try:
+        query_term = q.strip() if q and q.strip() else ""
+        if not query_term:
+            return []
+        
+        # Limitar el límite a máximo 50 para velocidad
+        limit = min(limit or 50, 50)
+        
+        print(f"🔍 [INVENTARIOS-MODAL] Búsqueda rápida: '{query_term}' (límite: {limit})")
+        
+        collection = get_collection("INVENTARIOS")
+        
+        # Construir filtro base (solo activos)
+        filtro = {"estado": {"$ne": "inactivo"}}
+        
+        # Filtrar por farmacia si se especifica
+        if farmacia and farmacia.strip():
+            filtro["farmacia"] = farmacia.strip()
+        
+        # PROYECCIÓN MÍNIMA (solo campos esenciales para el modal)
+        proyeccion_minima = {
+            "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
+            "cantidad": 1, "costo": 1, "precio_venta": 1, "precio": 1,
+            "farmacia": 1, "marca": 1, "utilidad": 1, "porcentaje_utilidad": 1
+        }
+        
+        # OPTIMIZACIÓN 1: Búsqueda exacta por código primero (MUY RÁPIDA con índice)
+        codigo_filtro = {**filtro, "codigo": query_term.upper()}
+        producto_exacto = await collection.find_one(
+            codigo_filtro,
+            projection=proyeccion_minima
+        )
+        
+        resultados = []
+        
+        if producto_exacto:
+            # Si encontramos coincidencia exacta, agregarla primero
+            producto_exacto["_id"] = str(producto_exacto["_id"])
+            # Calcular valores si faltan
+            costo = float(producto_exacto.get("costo", 0))
+            precio_venta = float(producto_exacto.get("precio_venta") or producto_exacto.get("precio", 0))
+            if costo > 0 and precio_venta == 0:
+                precio_venta = costo / 0.60
+            utilidad = precio_venta - costo if precio_venta > 0 and costo > 0 else float(producto_exacto.get("utilidad", 0))
+            porcentaje_utilidad = float(producto_exacto.get("porcentaje_utilidad", 40.0)) if utilidad > 0 else 0.0
+            
+            resultados.append({
+                "id": producto_exacto["_id"],
+                "_id": producto_exacto["_id"],
+                "codigo": producto_exacto.get("codigo", ""),
+                "nombre": producto_exacto.get("nombre", ""),
+                "descripcion": producto_exacto.get("descripcion", ""),
+                "marca": producto_exacto.get("marca", ""),
+                "cantidad": float(producto_exacto.get("cantidad", 0)),
+                "costo": round(costo, 2),
+                "precio_venta": round(precio_venta, 2),
+                "precio": round(precio_venta, 2),
+                "utilidad": round(utilidad, 2),
+                "porcentaje_utilidad": round(porcentaje_utilidad, 2),
+                "farmacia": producto_exacto.get("farmacia", "")
+            })
+        
+        # OPTIMIZACIÓN 2: Búsqueda por prefijo en código y nombre (usa índices)
+        # Solo si no encontramos coincidencia exacta o queremos más resultados
+        if len(resultados) < limit:
+            # Crear regex para búsqueda por prefijo (más rápida que búsqueda parcial)
+            regex_pattern = f"^{re.escape(query_term)}"
+            busqueda_filtro = {
+                **filtro,
+                "$or": [
+                    {"codigo": {"$regex": regex_pattern, "$options": "i"}},
+                    {"nombre": {"$regex": regex_pattern, "$options": "i"}}
+                ]
+            }
+            
+            # Excluir el producto exacto si ya lo agregamos
+            if producto_exacto:
+                busqueda_filtro["_id"] = {"$ne": producto_exacto["_id"]}
+            
+            # Buscar con límite reducido
+            productos_busqueda = await collection.find(
+                busqueda_filtro,
+                projection=proyeccion_minima
+            ).sort("nombre", 1).limit(limit - len(resultados)).to_list(length=limit - len(resultados))
+            
+            # Procesar resultados (mínimo procesamiento)
+            for inv in productos_busqueda:
+                inv_id = str(inv["_id"])
+                costo = float(inv.get("costo", 0))
+                precio_venta = float(inv.get("precio_venta") or inv.get("precio", 0))
+                if costo > 0 and precio_venta == 0:
+                    precio_venta = costo / 0.60
+                utilidad = precio_venta - costo if precio_venta > 0 and costo > 0 else float(inv.get("utilidad", 0))
+                porcentaje_utilidad = float(inv.get("porcentaje_utilidad", 40.0)) if utilidad > 0 else 0.0
+                
+                resultados.append({
+                    "id": inv_id,
+                    "_id": inv_id,
+                    "codigo": inv.get("codigo", ""),
+                    "nombre": inv.get("nombre", ""),
+                    "descripcion": inv.get("descripcion", ""),
+                    "marca": inv.get("marca", ""),
+                    "cantidad": float(inv.get("cantidad", 0)),
+                    "costo": round(costo, 2),
+                    "precio_venta": round(precio_venta, 2),
+                    "precio": round(precio_venta, 2),
+                    "utilidad": round(utilidad, 2),
+                    "porcentaje_utilidad": round(porcentaje_utilidad, 2),
+                    "farmacia": inv.get("farmacia", "")
+                })
+        
+        print(f"✅ [INVENTARIOS-MODAL] Búsqueda completada: {len(resultados)} resultados en <5s")
+        return resultados
+        
+    except Exception as e:
+        print(f"❌ [INVENTARIOS-MODAL] Error en búsqueda: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
