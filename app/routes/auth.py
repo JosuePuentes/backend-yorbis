@@ -1347,7 +1347,7 @@ async def actualizar_item_inventario(
 
 @router.get("/inventarios/buscar")
 async def buscar_productos_inventario_modal(
-    q: str = Query(..., description="Término de búsqueda (código, nombre, descripción)"),
+    q: Optional[str] = Query(None, description="Término de búsqueda (código, nombre, descripción)"),
     farmacia: Optional[str] = Query(None, description="ID de la farmacia"),
     limit: Optional[int] = Query(50, description="Límite de resultados (máximo 50)"),
     usuario: dict = Depends(get_current_user)
@@ -1359,20 +1359,24 @@ async def buscar_productos_inventario_modal(
     OPTIMIZACIONES:
     - Búsqueda exacta por código primero (instantánea con índice)
     - Búsqueda por prefijo en código y nombre (campos indexados)
+    - Búsqueda parcial en descripción si no hay resultados
     - Proyección mínima (solo campos esenciales)
     - Límite máximo de 50 resultados
     - Solo productos activos
     - Sin procesamiento pesado
     
     Parámetros:
-    - q: Término de búsqueda (código, nombre o descripción)
+    - q: Término de búsqueda (código, nombre o descripción) - opcional
     - farmacia: ID de la farmacia (opcional)
     - limit: Límite de resultados (máximo 50, por defecto 50)
     
     Response: Array de productos con campos mínimos
     """
     try:
-        query_term = q.strip() if q and q.strip() else ""
+        # Manejar parámetro q que puede ser None o string vacío
+        if q is None:
+            return []
+        query_term = str(q).strip() if q else ""
         if not query_term:
             return []
         
@@ -1437,12 +1441,17 @@ async def buscar_productos_inventario_modal(
         # Solo si no encontramos coincidencia exacta o queremos más resultados
         if len(resultados) < limit:
             # Crear regex para búsqueda por prefijo (más rápida que búsqueda parcial)
-            regex_pattern = f"^{re.escape(query_term)}"
+            # También buscar coincidencias parciales si el término tiene espacios
+            query_upper = query_term.upper()
+            query_lower = query_term.lower()
+            
             busqueda_filtro = {
                 **filtro,
                 "$or": [
-                    {"codigo": {"$regex": regex_pattern, "$options": "i"}},
-                    {"nombre": {"$regex": regex_pattern, "$options": "i"}}
+                    {"codigo": {"$regex": f"^{re.escape(query_upper)}", "$options": "i"}},
+                    {"nombre": {"$regex": f"^{re.escape(query_term)}", "$options": "i"}},
+                    {"nombre": {"$regex": re.escape(query_term), "$options": "i"}},
+                    {"descripcion": {"$regex": re.escape(query_term), "$options": "i"}}
                 ]
             }
             
@@ -1485,11 +1494,13 @@ async def buscar_productos_inventario_modal(
         print(f"✅ [INVENTARIOS-MODAL] Búsqueda completada: {len(resultados)} resultados en <5s")
         return resultados
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ [INVENTARIOS-MODAL] Error en búsqueda: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error al buscar productos: {str(e)}")
 
 @router.post("/inventarios/cargar-existencia")
 async def cargar_existencia_masiva(
@@ -1636,15 +1647,32 @@ async def cargar_existencia_masiva(
                     {"$set": update_data}
                 )
                 
-                productos_exitosos.append({
-                    "producto_id": producto_id,
-                    "nombre": producto_actual.get("nombre", ""),
+                # Obtener el producto actualizado completo para retornarlo
+                producto_actualizado = await collection.find_one({"_id": producto_object_id})
+                
+                # Formatear producto actualizado para el frontend
+                producto_formateado = {
+                    "id": producto_id,
+                    "_id": producto_id,
+                    "codigo": producto_actualizado.get("codigo", ""),
+                    "nombre": producto_actualizado.get("nombre", ""),
+                    "descripcion": producto_actualizado.get("descripcion", ""),
+                    "marca": producto_actualizado.get("marca", ""),
+                    "cantidad": float(producto_actualizado.get("cantidad", 0)),
+                    "costo": round(float(producto_actualizado.get("costo", 0)), 2),
+                    "precio_venta": round(float(producto_actualizado.get("precio_venta") or producto_actualizado.get("precio", 0)), 2),
+                    "precio": round(float(producto_actualizado.get("precio_venta") or producto_actualizado.get("precio", 0)), 2),
+                    "utilidad": round(float(producto_actualizado.get("utilidad", 0)), 2),
+                    "porcentaje_utilidad": round(float(producto_actualizado.get("porcentaje_utilidad", 0)), 2),
+                    "farmacia": producto_actualizado.get("farmacia", ""),
+                    "estado": producto_actualizado.get("estado", "activo"),
+                    # Información adicional para el frontend
                     "cantidad_anterior": cantidad_actual,
                     "cantidad_suma": cantidad_a_sumar,
-                    "cantidad_nueva": cantidad_nueva,
-                    "costo": round(costo_promedio, 2),
-                    "precio_venta": round(precio_venta_final, 2)
-                })
+                    "cantidad_nueva": cantidad_nueva
+                }
+                
+                productos_exitosos.append(producto_formateado)
                 
                 print(f"✅ [INVENTARIOS] Existencia cargada: {producto_actual.get('nombre', '')} - {cantidad_actual} + {cantidad_a_sumar} = {cantidad_nueva}")
                 
