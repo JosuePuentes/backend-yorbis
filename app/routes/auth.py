@@ -819,7 +819,9 @@ async def listar_inventarios(
     """
     try:
         collection = get_collection("INVENTARIOS")
-        filtro = {}
+        
+        # IMPORTANTE: Filtrar solo productos activos (igual que /inventarios/items)
+        filtro = {"estado": {"$ne": "inactivo"}}
         
         # Filtrar por farmacia si se especifica
         if farmacia and farmacia.strip():
@@ -827,6 +829,8 @@ async def listar_inventarios(
         
         # OPTIMIZACIÓN: Usar proyección y límite
         limit = min(limit or 500, 1000)  # Máximo 1000
+        
+        print(f"🔍 [INVENTARIOS] Listando inventarios - farmacia: {farmacia}, limit: {limit}")
         
         inventarios = await collection.find(
             filtro,
@@ -1663,8 +1667,9 @@ async def crear_producto_inventario(
         fecha_actual = now_ve.strftime("%Y-%m-%d")
         
         # Crear nuevo producto
+        # IMPORTANTE: Asegurar que el estado sea "activo" explícitamente
         nuevo_producto = {
-            "farmacia": farmacia,
+            "farmacia": str(farmacia).strip(),
             "nombre": nombre,
             "descripcion": datos_producto.get("descripcion", "").strip(),
             "marca": datos_producto.get("marca", "").strip(),
@@ -1677,8 +1682,10 @@ async def crear_producto_inventario(
             "usuarioCorreo": usuario_correo,
             "fecha": fecha_actual,
             "fechaCreacion": fecha_actual,
-            "estado": "activo"
+            "estado": "activo"  # IMPORTANTE: Estado activo explícito
         }
+        
+        print(f"📝 [INVENTARIOS] Datos del producto a crear: {nuevo_producto}")
         
         if codigo:
             nuevo_producto["codigo"] = codigo.upper()
