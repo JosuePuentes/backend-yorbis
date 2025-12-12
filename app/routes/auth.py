@@ -921,8 +921,9 @@ async def obtener_items_inventario_sin_id(
         if farmacia and farmacia.strip():
             filtro["farmacia"] = farmacia.strip()
         
-        # Limitar el límite a máximo 100 para velocidad
-        limit_val = min(limit or 50, 100)
+        # Limitar el límite a máximo 500 para mostrar más productos
+        # Si no se especifica limit, usar 500 para mostrar todos los productos activos
+        limit_val = min(limit or 500, 500)
         skip_val = max(skip or 0, 0)
         
         print(f"🔍 [INVENTARIOS] Obteniendo items (sin ID - PAGINADO) - limit: {limit_val}, skip: {skip_val}, farmacia: {farmacia}")
