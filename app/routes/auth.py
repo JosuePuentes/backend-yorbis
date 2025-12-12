@@ -1581,6 +1581,161 @@ async def buscar_productos_inventario_modal(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al buscar productos: {str(e)}")
 
+@router.post("/inventarios/crear-producto")
+async def crear_producto_inventario(
+    datos_producto: dict = Body(...),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Crea un nuevo producto en el inventario desde el modal de carga masiva.
+    
+    Body:
+    {
+      "farmacia": "01",           // ID de la farmacia (requerido)
+      "codigo": "PROD-001",       // Código del producto (opcional)
+      "nombre": "Producto Nuevo", // Nombre del producto (requerido)
+      "descripcion": "...",       // Descripción (opcional)
+      "marca": "Marca X",         // Marca (opcional)
+      "cantidad": 0,              // Cantidad inicial (opcional, default 0)
+      "costo": 100.00,            // Costo unitario (requerido)
+      "utilidad": 66.67,          // Utilidad en dinero (opcional)
+      "porcentaje_utilidad": 40.0, // Porcentaje de utilidad (opcional, default 40%)
+      "precio_venta": 166.67      // Precio de venta (opcional, se calcula si no se envía)
+    }
+    
+    Response:
+    {
+      "message": "Producto creado exitosamente",
+      "producto": {
+        "id": "...",
+        "codigo": "...",
+        "nombre": "...",
+        // ... resto de campos
+      }
+    }
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        usuario_correo = usuario.get("correo", "unknown")
+        
+        # Validar datos requeridos
+        farmacia = datos_producto.get("farmacia")
+        if not farmacia:
+            raise HTTPException(status_code=400, detail="El campo 'farmacia' es requerido")
+        
+        nombre = datos_producto.get("nombre", "").strip()
+        if not nombre:
+            raise HTTPException(status_code=400, detail="El campo 'nombre' es requerido")
+        
+        costo = float(datos_producto.get("costo", 0))
+        if costo <= 0:
+            raise HTTPException(status_code=400, detail="El campo 'costo' debe ser mayor a 0")
+        
+        # Verificar si ya existe un producto con el mismo código en esta farmacia
+        codigo = datos_producto.get("codigo", "").strip()
+        if codigo:
+            producto_existente = await collection.find_one({
+                "farmacia": farmacia,
+                "codigo": codigo.upper(),
+                "estado": {"$ne": "inactivo"}
+            })
+            if producto_existente:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Ya existe un producto con el código '{codigo}' en esta farmacia"
+                )
+        
+        # Calcular precio_venta y utilidad
+        precio_venta_enviado = datos_producto.get("precio_venta")
+        utilidad_enviada = datos_producto.get("utilidad")
+        porcentaje_utilidad_enviado = datos_producto.get("porcentaje_utilidad", 40.0)
+        
+        if precio_venta_enviado and precio_venta_enviado > 0:
+            # Si viene precio_venta explícito, usarlo
+            precio_venta_final = float(precio_venta_enviado)
+            if utilidad_enviada is not None:
+                utilidad_final = float(utilidad_enviada)
+            else:
+                utilidad_final = precio_venta_final - costo
+            porcentaje_utilidad_final = porcentaje_utilidad_enviado
+        elif utilidad_enviada is not None and utilidad_enviada > 0:
+            # Si viene utilidad, calcular precio_venta
+            utilidad_final = float(utilidad_enviada)
+            precio_venta_final = costo + utilidad_final
+            porcentaje_utilidad_final = (utilidad_final / costo) * 100 if costo > 0 else 0
+        else:
+            # Calcular automáticamente con porcentaje de utilidad (default 40%)
+            porcentaje_utilidad_final = float(porcentaje_utilidad_enviado)
+            precio_venta_final = costo / (1 - (porcentaje_utilidad_final / 100))
+            utilidad_final = precio_venta_final - costo
+        
+        # Obtener fecha actual
+        venezuela_tz = pytz.timezone("America/Caracas")
+        now_ve = datetime.now(venezuela_tz)
+        fecha_actual = now_ve.strftime("%Y-%m-%d")
+        
+        # Crear nuevo producto
+        nuevo_producto = {
+            "farmacia": farmacia,
+            "nombre": nombre,
+            "descripcion": datos_producto.get("descripcion", "").strip(),
+            "marca": datos_producto.get("marca", "").strip(),
+            "cantidad": float(datos_producto.get("cantidad", 0)),
+            "costo": round(costo, 2),
+            "precio_venta": round(precio_venta_final, 2),
+            "precio": round(precio_venta_final, 2),
+            "utilidad": round(utilidad_final, 2),
+            "porcentaje_utilidad": round(porcentaje_utilidad_final, 2),
+            "usuarioCorreo": usuario_correo,
+            "fecha": fecha_actual,
+            "fechaCreacion": fecha_actual,
+            "estado": "activo"
+        }
+        
+        if codigo:
+            nuevo_producto["codigo"] = codigo.upper()
+        
+        # Insertar en la base de datos
+        result = await collection.insert_one(nuevo_producto)
+        producto_id = str(result.inserted_id)
+        
+        # Obtener el producto creado para retornarlo
+        producto_creado = await collection.find_one({"_id": result.inserted_id})
+        producto_creado["_id"] = producto_id
+        
+        # Formatear respuesta
+        producto_formateado = {
+            "id": producto_id,
+            "_id": producto_id,
+            "codigo": producto_creado.get("codigo", ""),
+            "nombre": producto_creado.get("nombre", ""),
+            "descripcion": producto_creado.get("descripcion", ""),
+            "marca": producto_creado.get("marca", ""),
+            "cantidad": float(producto_creado.get("cantidad", 0)),
+            "costo": round(float(producto_creado.get("costo", 0)), 2),
+            "precio_venta": round(float(producto_creado.get("precio_venta", 0)), 2),
+            "precio": round(float(producto_creado.get("precio_venta", 0)), 2),
+            "utilidad": round(float(producto_creado.get("utilidad", 0)), 2),
+            "porcentaje_utilidad": round(float(producto_creado.get("porcentaje_utilidad", 0)), 2),
+            "farmacia": producto_creado.get("farmacia", ""),
+            "estado": producto_creado.get("estado", "activo")
+        }
+        
+        print(f"✅ [INVENTARIOS] Producto creado: {nombre} - ID: {producto_id}")
+        
+        return {
+            "message": "Producto creado exitosamente",
+            "producto": producto_formateado
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error creando producto: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error al crear producto: {str(e)}")
+
 @router.post("/inventarios/cargar-existencia")
 async def cargar_existencia_masiva(
     datos_carga: dict = Body(...),
