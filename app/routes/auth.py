@@ -104,6 +104,343 @@ async def obtener_usuarios(usuario_actual: dict = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ============================================================================
+# ENDPOINTS PARA MODIFICAR USUARIOS (Frontend usa /modificar-usuarios)
+# ============================================================================
+
+@router.get("/modificar-usuarios")
+async def obtener_usuarios_modificar(usuario_actual: dict = Depends(get_current_user)):
+    """
+    Obtiene todos los usuarios para el módulo de modificación.
+    Requiere autenticación.
+    """
+    try:
+        collection = get_collection("USUARIOS")
+        usuarios = await collection.find({}).to_list(length=None)
+        
+        # Convertir _id a string y limpiar datos sensibles
+        usuarios_limpios = []
+        for usuario in usuarios:
+            usuario["_id"] = str(usuario["_id"])
+            usuario["id"] = usuario["_id"]  # Agregar campo id para compatibilidad
+            # Remover la contraseña por seguridad
+            if "contraseña" in usuario:
+                del usuario["contraseña"]
+            usuarios_limpios.append(usuario)
+        
+        print(f"✅ [USUARIOS] Retornando {len(usuarios_limpios)} usuarios")
+        return usuarios_limpios
+    except Exception as e:
+        print(f"❌ [USUARIOS] Error obteniendo usuarios: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/modificar-usuarios/me")
+async def obtener_usuario_actual_modificar(usuario_actual: dict = Depends(get_current_user)):
+    """
+    Obtiene el usuario actual para el módulo de modificación.
+    Requiere autenticación.
+    """
+    try:
+        # Remover la contraseña por seguridad
+        usuario_info = usuario_actual.copy()
+        usuario_info["id"] = str(usuario_info.get("_id", ""))
+        if "contraseña" in usuario_info:
+            del usuario_info["contraseña"]
+        
+        return usuario_info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/modificar-usuarios/{usuario_id}")
+async def obtener_usuario_por_id(usuario_id: str, usuario_actual: dict = Depends(get_current_user)):
+    """
+    Obtiene un usuario específico por ID.
+    Requiere autenticación.
+    """
+    try:
+        collection = get_collection("USUARIOS")
+        
+        try:
+            usuario_object_id = ObjectId(usuario_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID de usuario inválido")
+        
+        usuario = await collection.find_one({"_id": usuario_object_id})
+        
+        if not usuario:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        usuario["_id"] = str(usuario["_id"])
+        usuario["id"] = usuario["_id"]
+        
+        # Remover la contraseña por seguridad
+        if "contraseña" in usuario:
+            del usuario["contraseña"]
+        
+        return usuario
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/modificar-usuarios")
+async def crear_usuario_nuevo(
+    usuario_data: dict = Body(...),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Crea un nuevo usuario.
+    Requiere autenticación.
+    """
+    try:
+        from passlib.context import CryptContext
+        
+        collection = get_collection("USUARIOS")
+        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        
+        # Validar campos requeridos
+        correo = usuario_data.get("correo", "").strip().lower()
+        if not correo:
+            raise HTTPException(status_code=400, detail="El campo 'correo' es requerido")
+        
+        contraseña = usuario_data.get("contraseña", "").strip()
+        if not contraseña:
+            raise HTTPException(status_code=400, detail="El campo 'contraseña' es requerido")
+        
+        # Verificar que el correo no exista
+        usuario_existente = await collection.find_one({"correo": correo})
+        if usuario_existente:
+            raise HTTPException(status_code=400, detail=f"Ya existe un usuario con el correo '{correo}'")
+        
+        # Hashear contraseña
+        contraseña_hash = pwd_context.hash(contraseña)
+        
+        # Crear nuevo usuario
+        nuevo_usuario = {
+            "correo": correo,
+            "contraseña": contraseña_hash,
+            "permisos": usuario_data.get("permisos", []),
+            "farmacias": usuario_data.get("farmacias", {}),
+            "fechaCreacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "usuarioCreacion": usuario_actual.get("correo", "unknown")
+        }
+        
+        resultado = await collection.insert_one(nuevo_usuario)
+        usuario_id = str(resultado.inserted_id)
+        
+        # Obtener usuario creado
+        usuario_creado = await collection.find_one({"_id": resultado.inserted_id})
+        usuario_creado["_id"] = usuario_id
+        usuario_creado["id"] = usuario_id
+        
+        # Remover contraseña
+        if "contraseña" in usuario_creado:
+            del usuario_creado["contraseña"]
+        
+        print(f"✅ [USUARIOS] Usuario creado: {correo} - ID: {usuario_id}")
+        
+        return {
+            "message": "Usuario creado exitosamente",
+            "id": usuario_id,
+            "usuario": usuario_creado
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [USUARIOS] Error creando usuario: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/modificar-usuarios/{usuario_id}")
+async def actualizar_usuario(
+    usuario_id: str,
+    usuario_data: dict = Body(...),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Actualiza un usuario existente.
+    Requiere autenticación.
+    """
+    try:
+        from passlib.context import CryptContext
+        
+        collection = get_collection("USUARIOS")
+        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        
+        try:
+            usuario_object_id = ObjectId(usuario_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID de usuario inválido")
+        
+        # Verificar que el usuario existe
+        usuario_existente = await collection.find_one({"_id": usuario_object_id})
+        if not usuario_existente:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        # Preparar datos de actualización
+        update_data = {}
+        
+        # Actualizar correo si se proporciona
+        if "correo" in usuario_data:
+            nuevo_correo = usuario_data.get("correo", "").strip().lower()
+            if nuevo_correo and nuevo_correo != usuario_existente.get("correo", ""):
+                # Verificar que el nuevo correo no exista
+                otro_usuario = await collection.find_one({"correo": nuevo_correo})
+                if otro_usuario and str(otro_usuario["_id"]) != usuario_id:
+                    raise HTTPException(status_code=400, detail=f"Ya existe un usuario con el correo '{nuevo_correo}'")
+                update_data["correo"] = nuevo_correo
+        
+        # Actualizar contraseña si se proporciona
+        if "contraseña" in usuario_data and usuario_data["contraseña"]:
+            contraseña_hash = pwd_context.hash(usuario_data["contraseña"])
+            update_data["contraseña"] = contraseña_hash
+        
+        # Actualizar permisos si se proporcionan
+        if "permisos" in usuario_data:
+            update_data["permisos"] = usuario_data["permisos"]
+        
+        # Actualizar farmacias si se proporcionan
+        if "farmacias" in usuario_data:
+            update_data["farmacias"] = usuario_data["farmacias"]
+        
+        # Agregar fecha de actualización
+        update_data["fechaActualizacion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        update_data["usuarioActualizacion"] = usuario_actual.get("correo", "unknown")
+        
+        # Actualizar usuario
+        await collection.update_one(
+            {"_id": usuario_object_id},
+            {"$set": update_data}
+        )
+        
+        # Obtener usuario actualizado
+        usuario_actualizado = await collection.find_one({"_id": usuario_object_id})
+        usuario_actualizado["_id"] = str(usuario_actualizado["_id"])
+        usuario_actualizado["id"] = usuario_actualizado["_id"]
+        
+        # Remover contraseña
+        if "contraseña" in usuario_actualizado:
+            del usuario_actualizado["contraseña"]
+        
+        print(f"✅ [USUARIOS] Usuario actualizado: {usuario_id}")
+        
+        return {
+            "message": "Usuario actualizado exitosamente",
+            "usuario": usuario_actualizado
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [USUARIOS] Error actualizando usuario: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/modificar-usuarios/{usuario_id}/permisos")
+async def actualizar_permisos_usuario(
+    usuario_id: str,
+    permisos_data: dict = Body(...),
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Actualiza solo los permisos de un usuario.
+    Requiere autenticación.
+    """
+    try:
+        collection = get_collection("USUARIOS")
+        
+        try:
+            usuario_object_id = ObjectId(usuario_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID de usuario inválido")
+        
+        # Verificar que el usuario existe
+        usuario_existente = await collection.find_one({"_id": usuario_object_id})
+        if not usuario_existente:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        # Actualizar permisos
+        permisos = permisos_data.get("permisos", [])
+        
+        await collection.update_one(
+            {"_id": usuario_object_id},
+            {
+                "$set": {
+                    "permisos": permisos,
+                    "fechaActualizacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "usuarioActualizacion": usuario_actual.get("correo", "unknown")
+                }
+            }
+        )
+        
+        # Obtener usuario actualizado
+        usuario_actualizado = await collection.find_one({"_id": usuario_object_id})
+        usuario_actualizado["_id"] = str(usuario_actualizado["_id"])
+        usuario_actualizado["id"] = usuario_actualizado["_id"]
+        
+        # Remover contraseña
+        if "contraseña" in usuario_actualizado:
+            del usuario_actualizado["contraseña"]
+        
+        print(f"✅ [USUARIOS] Permisos actualizados para usuario: {usuario_id}")
+        
+        return {
+            "message": "Permisos actualizados exitosamente",
+            "usuario": usuario_actualizado
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [USUARIOS] Error actualizando permisos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/modificar-usuarios/{usuario_id}")
+async def eliminar_usuario(
+    usuario_id: str,
+    usuario_actual: dict = Depends(get_current_user)
+):
+    """
+    Elimina un usuario (marca como inactivo, no elimina físicamente).
+    Requiere autenticación.
+    """
+    try:
+        collection = get_collection("USUARIOS")
+        
+        try:
+            usuario_object_id = ObjectId(usuario_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID de usuario inválido")
+        
+        # Verificar que el usuario existe
+        usuario_existente = await collection.find_one({"_id": usuario_object_id})
+        if not usuario_existente:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        # Marcar como inactivo en lugar de eliminar físicamente
+        await collection.update_one(
+            {"_id": usuario_object_id},
+            {
+                "$set": {
+                    "estado": "inactivo",
+                    "fechaEliminacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "usuarioEliminacion": usuario_actual.get("correo", "unknown")
+                }
+            }
+        )
+        
+        print(f"✅ [USUARIOS] Usuario marcado como inactivo: {usuario_id}")
+        
+        return {
+            "message": "Usuario eliminado exitosamente",
+            "id": usuario_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [USUARIOS] Error eliminando usuario: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/auth/me")
 async def get_current_user_info(usuario_actual: dict = Depends(get_current_user)):
