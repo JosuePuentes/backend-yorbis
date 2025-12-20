@@ -292,7 +292,31 @@ async def actualizar_usuario(
         
         # Actualizar contraseña si se proporciona
         if "contraseña" in usuario_data and usuario_data["contraseña"]:
-            contraseña_hash = pwd_context.hash(usuario_data["contraseña"])
+            contraseña_plana = usuario_data["contraseña"]
+            
+            # IMPORTANTE: bcrypt tiene un límite de 72 bytes para la contraseña
+            # Validar y truncar si es necesario
+            if isinstance(contraseña_plana, str):
+                # Convertir a bytes para verificar longitud
+                contraseña_bytes = contraseña_plana.encode('utf-8')
+                if len(contraseña_bytes) > 72:
+                    # Truncar a 72 bytes (puede cortar caracteres multibyte)
+                    contraseña_truncada = contraseña_bytes[:72].decode('utf-8', errors='ignore')
+                    print(f"⚠️ [USUARIOS] Contraseña truncada de {len(contraseña_bytes)} a 72 bytes (límite de bcrypt)")
+                    contraseña_plana = contraseña_truncada
+                elif len(contraseña_plana) > 72:
+                    # Si la longitud en caracteres es > 72, truncar por caracteres
+                    contraseña_plana = contraseña_plana[:72]
+                    print(f"⚠️ [USUARIOS] Contraseña truncada a 72 caracteres (límite de bcrypt)")
+            
+            # Validar longitud mínima
+            if len(contraseña_plana) < 4:
+                raise HTTPException(
+                    status_code=400,
+                    detail="La contraseña debe tener al menos 4 caracteres"
+                )
+            
+            contraseña_hash = pwd_context.hash(contraseña_plana)
             update_data["contraseña"] = contraseña_hash
         
         # Actualizar permisos si se proporcionan
