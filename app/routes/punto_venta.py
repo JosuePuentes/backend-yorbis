@@ -325,6 +325,13 @@ async def crear_venta(
         print(f"   - Total productos: {len(productos)}")
         print(f"   - Productos: {[{'id': p.get('productoId') or p.get('id'), 'codigo': p.get('codigo'), 'cantidad': p.get('cantidad')} for p in productos]}")
         
+        # Logs de depuración adicionales para verificar datos
+        for idx, producto_venta in enumerate(productos):
+            producto_id = producto_venta.get("productoId") or producto_venta.get("id")
+            codigo = producto_venta.get("codigo", "N/A")
+            cantidad = producto_venta.get("cantidad", 0)
+            print(f"   📦 Producto {idx + 1}: ID={producto_id}, Código={codigo}, Cantidad={cantidad}")
+        
         # Usar transacción para asegurar atomicidad: si falla la venta, no se descuenta stock
         client = get_client()
         
@@ -677,6 +684,10 @@ async def descontar_stock_inventario_con_sesion(
         print(f"📊 [INVENTARIO] Valores actuales - Existencia: {existencia_actual}, Cantidad: {cantidad_actual}, Stock: {stock_actual}")
         print(f"📊 [INVENTARIO] Cantidad disponible: {cantidad_disponible}")
         print(f"📊 [INVENTARIO] Cantidad a descontar: {cantidad_vendida}")
+        print(f"📊 [INVENTARIO] Valores ANTES del descuento:")
+        print(f"      - existencia: {existencia_actual}")
+        print(f"      - cantidad: {cantidad_actual}")
+        print(f"      - stock: {stock_actual}")
         
         if cantidad_disponible < cantidad_vendida:
             raise ValueError(f"Stock insuficiente. Disponible: {cantidad_disponible}, Requerido: {cantidad_vendida}")
@@ -747,6 +758,10 @@ async def descontar_stock_inventario_con_sesion(
             )
         
         print(f"✅ [INVENTARIO] Stock descontado exitosamente: {producto.get('codigo', producto_id)} - {cantidad_vendida} unidades, Costo: {costo_total:.2f}, Nueva cantidad: {nueva_cantidad}")
+        print(f"📊 [INVENTARIO] Valores DESPUÉS del descuento:")
+        print(f"      - existencia: {nueva_cantidad}")
+        print(f"      - cantidad: {nueva_cantidad}")
+        print(f"      - stock: {nueva_cantidad}")
         return costo_total
         
     except ValueError:

@@ -1250,9 +1250,11 @@ async def obtener_items_inventario_sin_id(
         collection = get_collection("INVENTARIOS")
         
         # OPTIMIZACIÓN: Proyección mínima (solo campos esenciales)
+        # IMPORTANTE: Incluir existencia y stock para sincronización con punto de venta
         proyeccion_minima = {
             "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-            "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+            "precio_venta": 1, "precio": 1, "marca": 1, 
+            "cantidad": 1, "existencia": 1, "stock": 1,  # Campos de stock
             "farmacia": 1, "costo": 1, "estado": 1, 
             "utilidad": 1, "porcentaje_utilidad": 1
         }
@@ -1293,6 +1295,20 @@ async def obtener_items_inventario_sin_id(
             utilidad = precio_venta - costo if precio_venta > 0 and costo > 0 else float(inv.get("utilidad", 0))
             porcentaje_utilidad = float(inv.get("porcentaje_utilidad", 40.0)) if utilidad > 0 else 0.0
             
+            # Obtener valores de stock (prioridad: existencia > cantidad > stock)
+            # IMPORTANTE: Usar misma lógica que punto de venta para sincronización
+            existencia = float(inv.get("existencia", 0))
+            cantidad_val = float(inv.get("cantidad", 0))
+            stock_val = float(inv.get("stock", 0))
+            
+            # Usar existencia como campo principal (igual que punto de venta)
+            if existencia > 0:
+                stock_disponible = existencia
+            elif cantidad_val > 0:
+                stock_disponible = cantidad_val
+            else:
+                stock_disponible = stock_val if stock_val > 0 else 0
+            
             # Construir resultado optimizado
             resultado = {
                 "_id": inv_id,
@@ -1301,7 +1317,9 @@ async def obtener_items_inventario_sin_id(
                 "nombre": inv.get("nombre", ""),
                 "descripcion": inv.get("descripcion", ""),
                 "marca": inv.get("marca", ""),
-                "cantidad": float(inv.get("cantidad", 0)),
+                "cantidad": float(stock_disponible),      # Usar existencia como valor
+                "existencia": float(stock_disponible),    # Campo principal
+                "stock": float(stock_disponible),         # Compatibilidad
                 "costo": round(costo, 2),
                 "precio_venta": round(precio_venta, 2),
                 "precio": round(precio_venta, 2),
@@ -1354,9 +1372,11 @@ async def obtener_items_inventario(
         collection = get_collection("INVENTARIOS")
         
         # OPTIMIZACIÓN: Proyección mínima (solo campos esenciales)
+        # IMPORTANTE: Incluir existencia y stock para sincronización con punto de venta
         proyeccion_minima = {
             "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,
-            "precio_venta": 1, "precio": 1, "marca": 1, "cantidad": 1,
+            "precio_venta": 1, "precio": 1, "marca": 1, 
+            "cantidad": 1, "existencia": 1, "stock": 1,  # Campos de stock
             "farmacia": 1, "costo": 1, "estado": 1, 
             "utilidad": 1, "porcentaje_utilidad": 1
         }
@@ -1401,6 +1421,20 @@ async def obtener_items_inventario(
             utilidad = precio_venta - costo if precio_venta > 0 and costo > 0 else float(inv.get("utilidad", 0))
             porcentaje_utilidad = float(inv.get("porcentaje_utilidad", 40.0)) if utilidad > 0 else 0.0
             
+            # Obtener valores de stock (prioridad: existencia > cantidad > stock)
+            # IMPORTANTE: Usar misma lógica que punto de venta para sincronización
+            existencia = float(inv.get("existencia", 0))
+            cantidad_val = float(inv.get("cantidad", 0))
+            stock_val = float(inv.get("stock", 0))
+            
+            # Usar existencia como campo principal (igual que punto de venta)
+            if existencia > 0:
+                stock_disponible = existencia
+            elif cantidad_val > 0:
+                stock_disponible = cantidad_val
+            else:
+                stock_disponible = stock_val if stock_val > 0 else 0
+            
             # Construir resultado optimizado
             resultado = {
                 "_id": inv_id,
@@ -1409,7 +1443,9 @@ async def obtener_items_inventario(
                 "nombre": inv.get("nombre", ""),
                 "descripcion": inv.get("descripcion", ""),
                 "marca": inv.get("marca", ""),
-                "cantidad": float(inv.get("cantidad", 0)),
+                "cantidad": float(stock_disponible),      # Usar existencia como valor
+                "existencia": float(stock_disponible),    # Campo principal
+                "stock": float(stock_disponible),         # Compatibilidad
                 "costo": round(costo, 2),
                 "precio_venta": round(precio_venta, 2),
                 "precio": round(precio_venta, 2),
