@@ -660,18 +660,39 @@ async def descontar_stock_inventario_con_sesion(
         # Si no se encontró por ID, intentar buscar por código
         if not producto:
             codigo_busqueda = codigo_producto or producto_id
-            filtro = {
-                "codigo": codigo_busqueda,
+            print(f"🔍 [INVENTARIO] Buscando producto por código: '{codigo_busqueda}' en farmacia: '{farmacia}'")
+            
+            # Intentar búsqueda exacta primero (case insensitive)
+            filtro_exacto = {
+                "codigo": {"$regex": f"^{codigo_busqueda}$", "$options": "i"},
                 "farmacia": farmacia,
                 "estado": {"$ne": "inactivo"}
             }
-            producto = await inventarios_collection.find_one(filtro, session=session)
+            producto = await inventarios_collection.find_one(filtro_exacto, session=session)
             
             if producto:
                 producto_object_id = producto["_id"]
-                print(f"✅ [INVENTARIO] Producto encontrado por código: {codigo_busqueda}")
+                print(f"✅ [INVENTARIO] Producto encontrado por código (exacto): {codigo_busqueda}")
             else:
-                raise ValueError(f"Producto no encontrado. ID: {producto_id}, Código: {codigo_busqueda}, Farmacia: {farmacia}")
+                # Intentar búsqueda sin filtro de estado (por si está inactivo pero necesitamos verlo)
+                filtro_sin_estado = {
+                    "codigo": {"$regex": f"^{codigo_busqueda}$", "$options": "i"},
+                    "farmacia": farmacia
+                }
+                producto = await inventarios_collection.find_one(filtro_sin_estado, session=session)
+                
+                if producto:
+                    print(f"⚠️ [INVENTARIO] Producto encontrado pero está inactivo: {codigo_busqueda}")
+                    raise ValueError(f"Producto encontrado pero está inactivo. ID: {producto_id}, Código: {codigo_busqueda}, Estado: {producto.get('estado')}")
+                else:
+                    # Buscar sin filtro de farmacia para debugging
+                    producto_debug = await inventarios_collection.find_one(
+                        {"codigo": {"$regex": f"^{codigo_busqueda}$", "$options": "i"}},
+                        session=session
+                    )
+                    if producto_debug:
+                        print(f"⚠️ [INVENTARIO] Producto existe pero en otra farmacia. Farmacia del producto: {producto_debug.get('farmacia')}, Farmacia buscada: {farmacia}")
+                    raise ValueError(f"Producto no encontrado. ID: {producto_id}, Código: {codigo_busqueda}, Farmacia: {farmacia}")
         
         # Validar stock disponible
         # Prioridad: existencia > cantidad > stock (según instrucciones, el frontend muestra "Existencia")
@@ -764,11 +785,29 @@ async def descontar_stock_inventario_con_sesion(
                 session=session
             )
         
-        print(f"✅ [INVENTARIO] Stock descontado exitosamente: {producto.get('codigo', producto_id)} - {cantidad_vendida} unidades, Costo: {costo_total:.2f}, Nueva cantidad: {nueva_cantidad}")
-        print(f"📊 [INVENTARIO] Valores DESPUÉS del descuento:")
-        print(f"      - existencia: {nueva_cantidad}")
-        print(f"      - cantidad: {nueva_cantidad}")
-        print(f"      - stock: {nueva_cantidad}")
+        # Verificar que la actualización se realizó correctamente
+        producto_actualizado = await inventarios_collection.find_one(
+            {"_id": producto_object_id},
+            session=session
+        )
+        
+        if producto_actualizado:
+            existencia_final = float(producto_actualizado.get("existencia", 0))
+            cantidad_final = float(producto_actualizado.get("cantidad", 0))
+            stock_final = float(producto_actualizado.get("stock", 0))
+            
+            print(f"✅ [INVENTARIO] Stock descontado exitosamente: {producto.get('codigo', producto_id)} - {cantidad_vendida} unidades, Costo: {costo_total:.2f}")
+            print(f"📊 [INVENTARIO] Valores DESPUÉS del descuento (verificados en BD):")
+            print(f"      - existencia: {existencia_final} (esperado: {nueva_cantidad})")
+            print(f"      - cantidad: {cantidad_final} (esperado: {nueva_cantidad})")
+            print(f"      - stock: {stock_final} (esperado: {nueva_cantidad})")
+            
+            # Verificar que los valores coincidan
+            if abs(existencia_final - nueva_cantidad) > 0.01 or abs(cantidad_final - nueva_cantidad) > 0.01 or abs(stock_final - nueva_cantidad) > 0.01:
+                print(f"⚠️ [INVENTARIO] ADVERTENCIA: Los valores actualizados no coinciden con los esperados!")
+        else:
+            print(f"⚠️ [INVENTARIO] ADVERTENCIA: No se pudo verificar el producto actualizado")
+        
         return costo_total
         
     except ValueError:
