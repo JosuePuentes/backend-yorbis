@@ -312,6 +312,32 @@ async def crear_venta(
         venta_dict = venta_data.copy()
         venta_dict["descuento_por_divisa"] = descuento_por_divisa
         
+        # IMPORTANTE: Verificar y preservar los items/productos recibidos del frontend
+        # El frontend puede enviar "items" o "productos"
+        items_recibidos = venta_data.get("items", [])
+        productos_recibidos = venta_data.get("productos", [])
+        
+        # Usar "productos" como campo estándar (compatibilidad con ambos)
+        if productos_recibidos:
+            venta_dict["productos"] = productos_recibidos
+            print(f"📦 [PUNTO_VENTA] Productos recibidos del frontend: {len(productos_recibidos)} items")
+        elif items_recibidos:
+            # Si viene como "items", convertir a "productos"
+            venta_dict["productos"] = items_recibidos
+            print(f"📦 [PUNTO_VENTA] Items recibidos del frontend (convertidos a productos): {len(items_recibidos)} items")
+        else:
+            print(f"⚠️ [PUNTO_VENTA] ADVERTENCIA: No se recibieron items ni productos del frontend")
+            print(f"   Campos recibidos: {list(venta_data.keys())}")
+        
+        # Log detallado de los productos recibidos
+        productos_para_guardar = venta_dict.get("productos", [])
+        if productos_para_guardar:
+            print(f"📦 [PUNTO_VENTA] Productos que se guardarán en la venta:")
+            for idx, prod in enumerate(productos_para_guardar[:5], 1):  # Mostrar primeros 5
+                print(f"   Producto {idx}: codigo={prod.get('codigo', 'N/A')}, nombre={prod.get('nombre', 'N/A')}, cantidad={prod.get('cantidad', 0)}")
+            if len(productos_para_guardar) > 5:
+                print(f"   ... y {len(productos_para_guardar) - 5} productos más")
+        
         # Agregar información de creación
         venta_dict["usuarioCreacion"] = usuario_actual.get("correo", "unknown")
         fecha_actual = datetime.now()
