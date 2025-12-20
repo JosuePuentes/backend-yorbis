@@ -693,9 +693,13 @@ async def obtener_ventas_usuario(
             }
             
             # Construir respuesta formateada
+            # IMPORTANTE: Incluir numero_factura (puede venir como numeroFactura o numero_factura)
+            numero_factura = venta.get("numeroFactura") or venta.get("numero_factura", "")
+            
             venta_formateada = {
                 "_id": venta_id,
-                "numero_factura": venta.get("numeroFactura", venta.get("numero_factura", "")),
+                "numero_factura": numero_factura,
+                "numeroFactura": numero_factura,  # Compatibilidad con ambos campos
                 "fecha": venta.get("fecha", ""),
                 "fechaCreacion": venta.get("fechaCreacion", ""),
                 "items": items_detallados,
