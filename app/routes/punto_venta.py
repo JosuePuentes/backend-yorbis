@@ -325,6 +325,45 @@ async def crear_venta(
         if not farmacia:
             raise HTTPException(status_code=400, detail="La venta debe tener una sucursal (sucursal o farmacia)")
         
+        # IMPORTANTE: Generar número de factura automáticamente si no existe
+        if not venta_dict.get("numeroFactura") and not venta_dict.get("numero_factura"):
+            # Obtener el siguiente número de factura para esta sucursal
+            ventas_collection = get_collection("VENTAS")
+            
+            # Buscar la última venta de esta sucursal para obtener el siguiente número
+            ultima_venta = await ventas_collection.find_one(
+                {
+                    "$or": [
+                        {"sucursal": farmacia},
+                        {"farmacia": farmacia}
+                    ],
+                    "numeroFactura": {"$exists": True, "$ne": ""}
+                },
+                sort=[("fechaCreacion", -1)]
+            )
+            
+            if ultima_venta:
+                # Extraer el número de la última factura
+                ultimo_numero_str = ultima_venta.get("numeroFactura") or ultima_venta.get("numero_factura", "")
+                try:
+                    # Intentar extraer el número (puede ser formato FAC-001, 001, etc.)
+                    import re
+                    numeros = re.findall(r'\d+', ultimo_numero_str)
+                    if numeros:
+                        siguiente_numero = int(numeros[-1]) + 1
+                    else:
+                        siguiente_numero = 1
+                except:
+                    siguiente_numero = 1
+            else:
+                siguiente_numero = 1
+            
+            # Formatear número de factura (ej: FAC-001, FAC-002, etc.)
+            numero_factura = f"FAC-{str(siguiente_numero).zfill(3)}"
+            venta_dict["numeroFactura"] = numero_factura
+            venta_dict["numero_factura"] = numero_factura  # Compatibilidad con ambos campos
+            print(f"📄 [PUNTO_VENTA] Número de factura generado: {numero_factura}")
+        
         # DESCONTAR STOCK DEL INVENTARIO Y GUARDAR VENTA CON TRANSACCIÓN (ATOMICIDAD)
         productos = venta_dict.get("productos", [])
         costo_inventario_total = 0.0
