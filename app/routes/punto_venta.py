@@ -353,28 +353,61 @@ async def crear_venta(
                             codigo_producto = producto_venta.get("codigo") or producto_venta.get("codigoProducto")
                             cantidad = float(producto_venta.get("cantidad", 0))
                             
-                            if producto_id and cantidad > 0:
-                                try:
-                                    print(f"🔄 [PUNTO_VENTA] Descontando producto - ID: {producto_id}, Código: {codigo_producto}, Cantidad: {cantidad}")
-                                    costo = await descontar_stock_inventario_con_sesion(
-                                        producto_id, cantidad, farmacia, session, codigo_producto
-                                    )
-                                    costo_inventario_total += costo
-                                    print(f"✅ [PUNTO_VENTA] Producto descontado exitosamente - ID: {producto_id}, Costo: {costo}")
-                                except Exception as e:
-                                    print(f"❌ [PUNTO_VENTA] Error descontando stock de producto {producto_id}: {e}")
-                                    import traceback
-                                    traceback.print_exc()
-                                    # Abortar transacción si falla el descuento
-                                    await session.abort_transaction()
-                                    raise HTTPException(
-                                        status_code=400,
-                                        detail=f"Error descontando stock: {str(e)}"
-                                    )
-                            elif not producto_id:
-                                print(f"⚠️ [PUNTO_VENTA] Producto sin ID válido: {producto_venta}")
-                            elif cantidad <= 0:
+                            # Validar que tengamos los datos necesarios
+                            if not producto_id and not codigo_producto:
+                                print(f"❌ [PUNTO_VENTA] ERROR CRÍTICO: Producto sin ID ni código válido")
+                                print(f"   Datos del producto: {producto_venta}")
+                                await session.abort_transaction()
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=f"Producto sin ID ni código válido. Datos: {producto_venta}"
+                                )
+                            
+                            if cantidad <= 0:
                                 print(f"⚠️ [PUNTO_VENTA] Producto con cantidad inválida: {cantidad}")
+                                continue  # Saltar este producto pero continuar con los demás
+                            
+                            try:
+                                print(f"🔄 [PUNTO_VENTA] ===== INICIANDO DESCUENTO DE PRODUCTO =====")
+                                print(f"   ID recibido: {producto_id}")
+                                print(f"   Código recibido: {codigo_producto}")
+                                print(f"   Cantidad a descontar: {cantidad}")
+                                print(f"   Farmacia/Sucursal: {farmacia}")
+                                print(f"   Datos completos del producto: {producto_venta}")
+                                
+                                costo = await descontar_stock_inventario_con_sesion(
+                                    producto_id or codigo_producto,  # Usar código si no hay ID
+                                    cantidad, 
+                                    farmacia, 
+                                    session, 
+                                    codigo_producto
+                                )
+                                costo_inventario_total += costo
+                                print(f"✅ [PUNTO_VENTA] ===== PRODUCTO DESCONTADO EXITOSAMENTE =====")
+                                print(f"   ID: {producto_id}")
+                                print(f"   Código: {codigo_producto}")
+                                print(f"   Cantidad descontada: {cantidad}")
+                                print(f"   Costo: {costo}")
+                            except HTTPException:
+                                # Re-lanzar HTTPException sin modificar
+                                raise
+                            except Exception as e:
+                                print(f"❌ [PUNTO_VENTA] ===== ERROR DESCONTANDO STOCK =====")
+                                print(f"   ID: {producto_id}")
+                                print(f"   Código: {codigo_producto}")
+                                print(f"   Cantidad: {cantidad}")
+                                print(f"   Farmacia: {farmacia}")
+                                print(f"   Error: {str(e)}")
+                                print(f"   Tipo de error: {type(e).__name__}")
+                                import traceback
+                                print(f"   Traceback completo:")
+                                traceback.print_exc()
+                                # Abortar transacción si falla el descuento
+                                await session.abort_transaction()
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=f"Error descontando stock del producto {codigo_producto or producto_id}: {str(e)}"
+                                )
                     
                     # 2. Guardar venta en la base de datos (dentro de la transacción)
                     ventas_collection = get_collection("VENTAS")
@@ -382,8 +415,14 @@ async def crear_venta(
                     venta_id = str(resultado.inserted_id)
                     
                     # 3. Si todo funciona, confirmar la transacción
+                    print(f"🔄 [PUNTO_VENTA] Confirmando transacción...")
                     await session.commit_transaction()
-                    print(f"✅ [PUNTO_VENTA] Transacción completada exitosamente - Venta: {venta_id}")
+                    print(f"✅ [PUNTO_VENTA] ===== TRANSACCIÓN COMPLETADA EXITOSAMENTE =====")
+                    print(f"   Venta ID: {venta_id}")
+                    print(f"   Total productos procesados: {len(productos)}")
+                    print(f"   Costo inventario total: {costo_inventario_total}")
+                    print(f"   Farmacia: {farmacia}")
+                    print(f"   Fecha: {fecha_venta}")
                     
             except HTTPException:
                 # Re-lanzar HTTPException sin modificar
@@ -642,20 +681,40 @@ async def descontar_stock_inventario_con_sesion(
         producto_object_id = None
         
         # Intentar buscar por ID primero
-        try:
-            producto_object_id = ObjectId(producto_id)
-            producto = await inventarios_collection.find_one(
-                {
-                    "_id": producto_object_id,
-                    "farmacia": farmacia
-                },
-                session=session
-            )
-            if producto:
-                print(f"✅ [INVENTARIO] Producto encontrado por ID: {producto_id}")
-        except (InvalidId, ValueError):
-            print(f"⚠️ [INVENTARIO] ID inválido, intentando buscar por código: {producto_id}")
-            producto_object_id = None
+        producto_object_id = None
+        if producto_id:
+            try:
+                producto_object_id = ObjectId(producto_id)
+                print(f"🔍 [INVENTARIO] Buscando producto por ID: {producto_id} en farmacia: {farmacia}")
+                producto = await inventarios_collection.find_one(
+                    {
+                        "_id": producto_object_id,
+                        "farmacia": farmacia
+                    },
+                    session=session
+                )
+                if producto:
+                    print(f"✅ [INVENTARIO] Producto encontrado por ID: {producto_id}")
+                    print(f"   Código del producto: {producto.get('codigo', 'N/A')}")
+                    print(f"   Nombre: {producto.get('nombre', 'N/A')}")
+                else:
+                    print(f"⚠️ [INVENTARIO] Producto con ID {producto_id} no encontrado en farmacia {farmacia}")
+                    # Buscar sin filtro de farmacia para debugging
+                    producto_debug = await inventarios_collection.find_one(
+                        {"_id": producto_object_id},
+                        session=session
+                    )
+                    if producto_debug:
+                        print(f"⚠️ [INVENTARIO] Producto existe pero en otra farmacia. Farmacia del producto: {producto_debug.get('farmacia')}, Farmacia buscada: {farmacia}")
+                    producto = None
+            except (InvalidId, ValueError) as e:
+                print(f"⚠️ [INVENTARIO] ID inválido '{producto_id}': {e}")
+                print(f"   Intentando buscar por código...")
+                producto_object_id = None
+                producto = None
+        else:
+            print(f"⚠️ [INVENTARIO] No se proporcionó producto_id, buscando solo por código")
+            producto = None
         
         # Si no se encontró por ID, intentar buscar por código
         if not producto:
