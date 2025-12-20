@@ -1849,21 +1849,13 @@ async def eliminar_item_inventario_por_id(
                 detail=f"Item con ID {item_id} no encontrado"
             )
         
-        # Verificar que pertenezca al inventario si se especificó
-        if inventario_id_clean:
-            item_farmacia = item.get("farmacia", "")
-            if item_farmacia != inventario_id_clean:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"El item pertenece a la farmacia '{item_farmacia}', no a '{inventario_id_clean}'"
-                )
-        
-        # Información del item antes de eliminar
+        # IMPORTANTE: No validar farmacia - permitir eliminar cualquier producto
+        # El usuario puede eliminar productos de cualquier farmacia sin restricciones
         codigo_item = item.get("codigo", "N/A")
         nombre_item = item.get("nombre", "N/A")
         farmacia_item = item.get("farmacia", "N/A")
         
-        print(f"   Item encontrado: {codigo_item} - {nombre_item} (Farmacia: {farmacia_item})")
+        print(f"   Item encontrado: {codigo_item} - {nombre_item} (Farmacia: {farmacia_item}) - Eliminando sin restricciones")
         
         # Eliminar el item
         resultado = await collection.delete_one({"_id": item_object_id})
