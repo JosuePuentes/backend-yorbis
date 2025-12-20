@@ -459,15 +459,35 @@ async def crear_venta(
                     
                     # IMPORTANTE: Asegurar que los items se guarden completos
                     # Los productos ya vienen en venta_dict["productos"] desde el frontend
-                    print(f"📋 [PUNTO_VENTA] Guardando venta con {len(venta_dict.get('productos', []))} productos")
-                    print(f"   Estado: {venta_dict.get('estado')}")
-                    print(f"   Número factura: {venta_dict.get('numeroFactura') or venta_dict.get('numero_factura', 'N/A')}")
+                    productos_count = len(venta_dict.get('productos', []))
+                    numero_factura = venta_dict.get('numeroFactura') or venta_dict.get('numero_factura', 'N/A')
+                    
+                    print(f"📋 [PUNTO_VENTA] Guardando venta:")
+                    print(f"   - Estado: '{venta_dict.get('estado')}' (debe ser 'procesada')")
+                    print(f"   - Número factura: {numero_factura}")
+                    print(f"   - Productos: {productos_count}")
+                    print(f"   - Sucursal/Farmacia: {farmacia}")
+                    print(f"   - Fecha: {fecha_venta}")
+                    
+                    # Verificar que el estado sea exactamente "procesada"
+                    if venta_dict.get("estado") != "procesada":
+                        print(f"❌ [PUNTO_VENTA] ERROR: Estado no es 'procesada': '{venta_dict.get('estado')}'")
+                        raise ValueError(f"Estado debe ser 'procesada', recibido: '{venta_dict.get('estado')}'")
                     
                     ventas_collection = get_collection("VENTAS")
                     resultado = await ventas_collection.insert_one(venta_dict, session=session)
                     venta_id = str(resultado.inserted_id)
                     
+                    # Verificar que se guardó correctamente
+                    venta_guardada = await ventas_collection.find_one({"_id": resultado.inserted_id}, session=session)
+                    estado_guardado = venta_guardada.get("estado") if venta_guardada else "N/A"
+                    
                     print(f"✅ [PUNTO_VENTA] Venta guardada con ID: {venta_id}")
+                    print(f"   - Estado guardado en BD: '{estado_guardado}' (debe ser 'procesada')")
+                    print(f"   - Número factura guardado: {venta_guardada.get('numeroFactura') or venta_guardada.get('numero_factura', 'N/A') if venta_guardada else 'N/A'}")
+                    
+                    if estado_guardado != "procesada":
+                        print(f"⚠️ [PUNTO_VENTA] ADVERTENCIA: Estado guardado no es 'procesada': '{estado_guardado}'")
                     
                     # 3. Si todo funciona, confirmar la transacción
                     print(f"🔄 [PUNTO_VENTA] Confirmando transacción...")
@@ -634,16 +654,55 @@ async def obtener_ventas_usuario(
         # Filtrar por rango de fechas
         if fecha_inicio and fecha_fin:
             filtro["fecha"] = {"$gte": fecha_inicio, "$lte": fecha_fin}
+            print(f"📋 [PUNTO_VENTA] Filtro de fechas: {fecha_inicio} a {fecha_fin}")
         elif fecha_inicio:
             filtro["fecha"] = {"$gte": fecha_inicio}
+            print(f"📋 [PUNTO_VENTA] Filtro de fecha inicio: {fecha_inicio}")
         elif fecha_fin:
             filtro["fecha"] = {"$lte": fecha_fin}
+            print(f"📋 [PUNTO_VENTA] Filtro de fecha fin: {fecha_fin}")
+        
+        # DIAGNÓSTICO: Contar ventas totales y con estado "procesada"
+        total_ventas = await ventas_collection.count_documents({})
+        ventas_procesadas = await ventas_collection.count_documents({"estado": "procesada"})
+        ventas_sucursal = await ventas_collection.count_documents({
+            "$or": [
+                {"sucursal": sucursal.strip()},
+                {"farmacia": sucursal.strip()}
+            ]
+        })
+        ventas_filtro = await ventas_collection.count_documents(filtro)
+        
+        print(f"🔍 [PUNTO_VENTA] DIAGNÓSTICO:")
+        print(f"   - Total ventas en BD: {total_ventas}")
+        print(f"   - Ventas con estado 'procesada': {ventas_procesadas}")
+        print(f"   - Ventas de sucursal {sucursal}: {ventas_sucursal}")
+        print(f"   - Ventas que cumplen el filtro completo: {ventas_filtro}")
+        
+        # Verificar estados distintos en la BD
+        estados_distintos = await ventas_collection.distinct("estado")
+        print(f"   - Estados distintos en BD: {estados_distintos}")
+        
+        # Si no hay ventas con el filtro, buscar sin filtro de estado para diagnóstico
+        if ventas_filtro == 0:
+            print(f"⚠️ [PUNTO_VENTA] No se encontraron ventas con el filtro. Buscando sin filtro de estado...")
+            ventas_sin_estado = await ventas_collection.find({
+                "$or": [
+                    {"sucursal": sucursal.strip()},
+                    {"farmacia": sucursal.strip()}
+                ]
+            }).limit(5).to_list(length=5)
+            if ventas_sin_estado:
+                print(f"   - Se encontraron {len(ventas_sin_estado)} ventas de la sucursal (sin filtro de estado):")
+                for v in ventas_sin_estado:
+                    print(f"     * ID: {v.get('_id')}, Estado: '{v.get('estado', 'N/A')}', Fecha: {v.get('fecha', 'N/A')}")
         
         # Limitar resultados
         limit_val = min(limit or 100, 10000)  # Máximo 10000
         
         # Obtener ventas ordenadas por fecha descendente
         ventas = await ventas_collection.find(filtro).sort("fechaCreacion", -1).limit(limit_val).to_list(length=limit_val)
+        print(f"📋 [PUNTO_VENTA] Ventas encontradas con el filtro: {len(ventas)}")
         
         # Formatear respuesta con items detallados
         resultados = []
