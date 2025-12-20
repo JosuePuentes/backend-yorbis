@@ -2,7 +2,7 @@
 Rutas para punto de venta
 """
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
-from app.db.mongo import get_collection
+from app.db.mongo import get_collection, get_client
 from app.core.get_current_user import get_current_user
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
@@ -289,32 +289,73 @@ async def crear_venta(
         if not farmacia:
             raise HTTPException(status_code=400, detail="La venta debe tener una sucursal (sucursal o farmacia)")
         
-        # DESCONTAR STOCK DEL INVENTARIO
+        # DESCONTAR STOCK DEL INVENTARIO Y GUARDAR VENTA CON TRANSACCIÓN (ATOMICIDAD)
         productos = venta_dict.get("productos", [])
         costo_inventario_total = 0.0
         
-        if productos:
-            print(f"📦 [PUNTO_VENTA] Descontando stock de {len(productos)} productos...")
-            for producto_venta in productos:
-                producto_id = producto_venta.get("productoId") or producto_venta.get("id")
-                cantidad = float(producto_venta.get("cantidad", 0))
-                
-                if producto_id and cantidad > 0:
-                    try:
-                        costo = await descontar_stock_inventario(producto_id, cantidad, farmacia)
-                        costo_inventario_total += costo
-                    except Exception as e:
-                        print(f"⚠️ [PUNTO_VENTA] Error descontando stock de producto {producto_id}: {e}")
-                        # Continuar con otros productos pero registrar el error
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Error descontando stock: {str(e)}"
-                        )
+        print(f"📋 [PUNTO_VENTA] Datos de la venta:")
+        print(f"   - Farmacia/Sucursal: {farmacia}")
+        print(f"   - Fecha: {fecha_venta}")
+        print(f"   - Total productos: {len(productos)}")
+        print(f"   - Productos: {[{'id': p.get('productoId') or p.get('id'), 'codigo': p.get('codigo'), 'cantidad': p.get('cantidad')} for p in productos]}")
         
-        # Guardar en la base de datos
-        ventas_collection = get_collection("VENTAS")
-        resultado = await ventas_collection.insert_one(venta_dict)
-        venta_id = str(resultado.inserted_id)
+        # Usar transacción para asegurar atomicidad: si falla la venta, no se descuenta stock
+        client = get_client()
+        
+        async with await client.start_session() as session:
+            try:
+                async with session.start_transaction():
+                    # 1. Descontar stock del inventario (dentro de la transacción)
+                    if productos:
+                        print(f"📦 [PUNTO_VENTA] Descontando stock de {len(productos)} productos (con transacción)...")
+                        for producto_venta in productos:
+                            producto_id = producto_venta.get("productoId") or producto_venta.get("id")
+                            codigo_producto = producto_venta.get("codigo") or producto_venta.get("codigoProducto")
+                            cantidad = float(producto_venta.get("cantidad", 0))
+                            
+                            if producto_id and cantidad > 0:
+                                try:
+                                    print(f"🔄 [PUNTO_VENTA] Descontando producto - ID: {producto_id}, Código: {codigo_producto}, Cantidad: {cantidad}")
+                                    costo = await descontar_stock_inventario_con_sesion(
+                                        producto_id, cantidad, farmacia, session, codigo_producto
+                                    )
+                                    costo_inventario_total += costo
+                                    print(f"✅ [PUNTO_VENTA] Producto descontado exitosamente - ID: {producto_id}, Costo: {costo}")
+                                except Exception as e:
+                                    print(f"❌ [PUNTO_VENTA] Error descontando stock de producto {producto_id}: {e}")
+                                    import traceback
+                                    traceback.print_exc()
+                                    # Abortar transacción si falla el descuento
+                                    await session.abort_transaction()
+                                    raise HTTPException(
+                                        status_code=400,
+                                        detail=f"Error descontando stock: {str(e)}"
+                                    )
+                            elif not producto_id:
+                                print(f"⚠️ [PUNTO_VENTA] Producto sin ID válido: {producto_venta}")
+                            elif cantidad <= 0:
+                                print(f"⚠️ [PUNTO_VENTA] Producto con cantidad inválida: {cantidad}")
+                    
+                    # 2. Guardar venta en la base de datos (dentro de la transacción)
+                    ventas_collection = get_collection("VENTAS")
+                    resultado = await ventas_collection.insert_one(venta_dict, session=session)
+                    venta_id = str(resultado.inserted_id)
+                    
+                    # 3. Si todo funciona, confirmar la transacción
+                    await session.commit_transaction()
+                    print(f"✅ [PUNTO_VENTA] Transacción completada exitosamente - Venta: {venta_id}")
+                    
+            except HTTPException:
+                # Re-lanzar HTTPException sin modificar
+                raise
+            except Exception as e:
+                # Si hay cualquier error, abortar la transacción
+                print(f"❌ [PUNTO_VENTA] Error en transacción, abortando: {e}")
+                await session.abort_transaction()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error al procesar venta: {str(e)}"
+                )
         
         # Convertir _id a string en la respuesta
         venta_dict["_id"] = venta_id
@@ -535,31 +576,77 @@ async def obtener_tasa_del_dia(
 # FUNCIONES AUXILIARES PARA VENTAS
 # ============================================================================
 
-async def descontar_stock_inventario(producto_id: str, cantidad_vendida: float, farmacia: str):
+async def descontar_stock_inventario_con_sesion(
+    producto_id: str, 
+    cantidad_vendida: float, 
+    farmacia: str, 
+    session,
+    codigo_producto: Optional[str] = None
+):
     """
-    Descuenta stock del inventario usando FIFO para lotes.
+    Descuenta stock del inventario usando FIFO para lotes (con sesión de transacción).
     Retorna el costo total descontado para calcular el costo de inventario.
+    IMPORTANTE: Esta función debe usarse dentro de una transacción para asegurar atomicidad.
+    
+    Args:
+        producto_id: ID del producto (puede ser ObjectId o código)
+        cantidad_vendida: Cantidad a descontar
+        farmacia: ID de la farmacia/sucursal
+        session: Sesión de transacción de MongoDB
+        codigo_producto: Código del producto (opcional, para búsqueda alternativa)
     """
     try:
         inventarios_collection = get_collection("INVENTARIOS")
         
-        # Buscar el producto en el inventario
+        producto = None
+        producto_object_id = None
+        
+        # Intentar buscar por ID primero
         try:
             producto_object_id = ObjectId(producto_id)
-        except InvalidId:
-            raise ValueError(f"ID de producto inválido: {producto_id}")
+            producto = await inventarios_collection.find_one(
+                {
+                    "_id": producto_object_id,
+                    "farmacia": farmacia
+                },
+                session=session
+            )
+            if producto:
+                print(f"✅ [INVENTARIO] Producto encontrado por ID: {producto_id}")
+        except (InvalidId, ValueError):
+            print(f"⚠️ [INVENTARIO] ID inválido, intentando buscar por código: {producto_id}")
+            producto_object_id = None
         
-        producto = await inventarios_collection.find_one({
-            "_id": producto_object_id,
-            "farmacia": farmacia
-        })
-        
+        # Si no se encontró por ID, intentar buscar por código
         if not producto:
-            raise ValueError(f"Producto {producto_id} no encontrado en farmacia {farmacia}")
+            codigo_busqueda = codigo_producto or producto_id
+            filtro = {
+                "codigo": codigo_busqueda,
+                "farmacia": farmacia,
+                "estado": {"$ne": "inactivo"}
+            }
+            producto = await inventarios_collection.find_one(filtro, session=session)
+            
+            if producto:
+                producto_object_id = producto["_id"]
+                print(f"✅ [INVENTARIO] Producto encontrado por código: {codigo_busqueda}")
+            else:
+                raise ValueError(f"Producto no encontrado. ID: {producto_id}, Código: {codigo_busqueda}, Farmacia: {farmacia}")
         
+        # Validar stock disponible
         cantidad_actual = float(producto.get("cantidad", 0))
-        if cantidad_actual < cantidad_vendida:
-            raise ValueError(f"Stock insuficiente. Disponible: {cantidad_actual}, Requerido: {cantidad_vendida}")
+        stock_actual = float(producto.get("stock", cantidad_actual))  # Usar stock si existe, sino cantidad
+        existencia_actual = float(producto.get("existencia", cantidad_actual))  # Usar existencia si existe
+        
+        # Usar el mayor valor disponible entre cantidad, stock y existencia
+        cantidad_disponible = max(cantidad_actual, stock_actual, existencia_actual)
+        
+        print(f"📊 [INVENTARIO] Producto: {producto.get('codigo', 'N/A')} - {producto.get('nombre', 'N/A')}")
+        print(f"📊 [INVENTARIO] Cantidad disponible: {cantidad_disponible} (cantidad: {cantidad_actual}, stock: {stock_actual}, existencia: {existencia_actual})")
+        print(f"📊 [INVENTARIO] Cantidad a descontar: {cantidad_vendida}")
+        
+        if cantidad_disponible < cantidad_vendida:
+            raise ValueError(f"Stock insuficiente. Disponible: {cantidad_disponible}, Requerido: {cantidad_vendida}")
         
         # Manejar lotes con FIFO
         lotes = producto.get("lotes", [])
@@ -593,32 +680,180 @@ async def descontar_stock_inventario(producto_id: str, cantidad_vendida: float, 
                     cantidad_restante = 0
             
             # Actualizar producto con lotes actualizados
-            nueva_cantidad = cantidad_actual - cantidad_vendida
+            nueva_cantidad = cantidad_disponible - cantidad_vendida
+            update_data = {
+                "cantidad": nueva_cantidad,
+                "lotes": lotes_actualizados
+            }
+            
+            # Actualizar también stock y existencia si existen
+            if "stock" in producto:
+                update_data["stock"] = nueva_cantidad
+            if "existencia" in producto:
+                update_data["existencia"] = nueva_cantidad
+            
             await inventarios_collection.update_one(
                 {"_id": producto_object_id},
-                {
-                    "$set": {
-                        "cantidad": nueva_cantidad,
-                        "lotes": lotes_actualizados
-                    }
-                }
+                {"$set": update_data},
+                session=session
             )
         else:
             # Sin lotes: usar costo promedio
             costo_promedio = float(producto.get("costo", 0))
             costo_total = cantidad_vendida * costo_promedio
-            nueva_cantidad = cantidad_actual - cantidad_vendida
+            nueva_cantidad = cantidad_disponible - cantidad_vendida
+            
+            update_data = {"cantidad": nueva_cantidad}
+            
+            # Actualizar también stock y existencia si existen
+            if "stock" in producto:
+                update_data["stock"] = nueva_cantidad
+            if "existencia" in producto:
+                update_data["existencia"] = nueva_cantidad
             
             await inventarios_collection.update_one(
                 {"_id": producto_object_id},
-                {"$set": {"cantidad": nueva_cantidad}}
+                {"$set": update_data},
+                session=session
             )
         
-        print(f"📦 [INVENTARIO] Stock descontado: {producto_id} - {cantidad_vendida} unidades, Costo: {costo_total}")
+        print(f"✅ [INVENTARIO] Stock descontado exitosamente: {producto.get('codigo', producto_id)} - {cantidad_vendida} unidades, Costo: {costo_total:.2f}, Nueva cantidad: {nueva_cantidad}")
         return costo_total
         
+    except ValueError:
+        # Re-lanzar ValueError sin modificar
+        raise
     except Exception as e:
         print(f"❌ [INVENTARIO] Error descontando stock: {e}")
+        import traceback
+        traceback.print_exc()
+        raise ValueError(f"Error descontando stock: {str(e)}")
+
+async def descontar_stock_inventario(producto_id: str, cantidad_vendida: float, farmacia: str, codigo_producto: Optional[str] = None):
+    """
+    Descuenta stock del inventario usando FIFO para lotes (SIN transacción).
+    Retorna el costo total descontado para calcular el costo de inventario.
+    NOTA: Esta función NO usa transacciones. Usar descontar_stock_inventario_con_sesion si necesitas atomicidad.
+    """
+    try:
+        inventarios_collection = get_collection("INVENTARIOS")
+        
+        producto = None
+        producto_object_id = None
+        
+        # Intentar buscar por ID primero
+        try:
+            producto_object_id = ObjectId(producto_id)
+            producto = await inventarios_collection.find_one({
+                "_id": producto_object_id,
+                "farmacia": farmacia
+            })
+            if producto:
+                print(f"✅ [INVENTARIO] Producto encontrado por ID: {producto_id}")
+        except (InvalidId, ValueError):
+            print(f"⚠️ [INVENTARIO] ID inválido, intentando buscar por código: {producto_id}")
+            producto_object_id = None
+        
+        # Si no se encontró por ID, intentar buscar por código
+        if not producto:
+            codigo_busqueda = codigo_producto or producto_id
+            filtro = {
+                "codigo": codigo_busqueda,
+                "farmacia": farmacia,
+                "estado": {"$ne": "inactivo"}
+            }
+            producto = await inventarios_collection.find_one(filtro)
+            
+            if producto:
+                producto_object_id = producto["_id"]
+                print(f"✅ [INVENTARIO] Producto encontrado por código: {codigo_busqueda}")
+            else:
+                raise ValueError(f"Producto no encontrado. ID: {producto_id}, Código: {codigo_busqueda}, Farmacia: {farmacia}")
+        
+        # Validar stock disponible
+        cantidad_actual = float(producto.get("cantidad", 0))
+        stock_actual = float(producto.get("stock", cantidad_actual))
+        existencia_actual = float(producto.get("existencia", cantidad_actual))
+        cantidad_disponible = max(cantidad_actual, stock_actual, existencia_actual)
+        
+        if cantidad_disponible < cantidad_vendida:
+            raise ValueError(f"Stock insuficiente. Disponible: {cantidad_disponible}, Requerido: {cantidad_vendida}")
+        
+        # Manejar lotes con FIFO
+        lotes = producto.get("lotes", [])
+        cantidad_restante = cantidad_vendida
+        costo_total = 0.0
+        
+        if lotes and len(lotes) > 0:
+            # Ordenar lotes por fecha (FIFO: primero los más antiguos)
+            lotes_ordenados = sorted(lotes, key=lambda x: x.get("fecha_vencimiento", "9999-12-31"))
+            
+            # Descontar de lotes
+            lotes_actualizados = []
+            for lote in lotes_ordenados:
+                if cantidad_restante <= 0:
+                    lotes_actualizados.append(lote)
+                    continue
+                
+                cantidad_lote = float(lote.get("cantidad", 0))
+                costo_lote = float(lote.get("costo", 0))
+                
+                if cantidad_lote <= cantidad_restante:
+                    # Descontar todo el lote
+                    costo_total += cantidad_lote * costo_lote
+                    cantidad_restante -= cantidad_lote
+                else:
+                    # Descontar parcialmente del lote
+                    costo_total += cantidad_restante * costo_lote
+                    lote["cantidad"] = cantidad_lote - cantidad_restante
+                    lotes_actualizados.append(lote)
+                    cantidad_restante = 0
+            
+            # Actualizar producto con lotes actualizados
+            nueva_cantidad = cantidad_disponible - cantidad_vendida
+            update_data = {
+                "cantidad": nueva_cantidad,
+                "lotes": lotes_actualizados
+            }
+            
+            # Actualizar también stock y existencia si existen
+            if "stock" in producto:
+                update_data["stock"] = nueva_cantidad
+            if "existencia" in producto:
+                update_data["existencia"] = nueva_cantidad
+            
+            await inventarios_collection.update_one(
+                {"_id": producto_object_id},
+                {"$set": update_data}
+            )
+        else:
+            # Sin lotes: usar costo promedio
+            costo_promedio = float(producto.get("costo", 0))
+            costo_total = cantidad_vendida * costo_promedio
+            nueva_cantidad = cantidad_disponible - cantidad_vendida
+            
+            update_data = {"cantidad": nueva_cantidad}
+            
+            # Actualizar también stock y existencia si existen
+            if "stock" in producto:
+                update_data["stock"] = nueva_cantidad
+            if "existencia" in producto:
+                update_data["existencia"] = nueva_cantidad
+            
+            await inventarios_collection.update_one(
+                {"_id": producto_object_id},
+                {"$set": update_data}
+            )
+        
+        print(f"✅ [INVENTARIO] Stock descontado: {producto.get('codigo', producto_id)} - {cantidad_vendida} unidades, Costo: {costo_total:.2f}")
+        return costo_total
+        
+    except ValueError:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIO] Error descontando stock: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 async def obtener_tipo_metodo_banco(banco_id: str) -> str:
