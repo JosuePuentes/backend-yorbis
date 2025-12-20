@@ -539,44 +539,142 @@ async def obtener_ventas(
 
 @router.get("/punto-venta/ventas/usuario")
 async def obtener_ventas_usuario(
+    sucursal: str = Query(..., description="ID de la sucursal (requerido)"),
+    fecha_inicio: Optional[str] = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
+    fecha_fin: Optional[str] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
+    limit: Optional[int] = Query(100, description="Límite de resultados (default 100)"),
     usuario_actual: dict = Depends(get_current_user)
 ):
     """
-    Obtiene las ventas procesadas del usuario actual.
-    Solo retorna ventas con estado: "procesada".
-    Incluye el campo descuento_por_divisa en cada venta.
+    Obtiene las ventas confirmadas/impresas con información detallada de productos.
+    
+    Retorna ventas con estado "procesada" (confirmadas/impresas, no borradores ni canceladas).
+    Incluye el array items con todos los productos vendidos detallados.
+    Cada item incluye: codigo, nombre/descripcion, marca, cantidad, precio_unitario, subtotal.
+    Incluye información del cliente si existe.
+    
+    Query Parameters:
+    - sucursal (requerido): ID de la sucursal
+    - fecha_inicio (opcional): YYYY-MM-DD
+    - fecha_fin (opcional): YYYY-MM-DD
+    - limit (opcional): default 100
+    
     Requiere autenticación.
     """
     try:
-        usuario_correo = usuario_actual.get("correo", "unknown")
-        print(f"📋 [PUNTO_VENTA] Obteniendo ventas procesadas del usuario: {usuario_correo}")
+        print(f"📋 [PUNTO_VENTA] Obteniendo ventas - Sucursal: {sucursal}, Fecha inicio: {fecha_inicio}, Fecha fin: {fecha_fin}")
         
         ventas_collection = get_collection("VENTAS")
+        clientes_collection = get_collection("CLIENTES")
         
-        # Buscar ventas del usuario actual con estado "procesada"
+        # Construir filtro
         filtro = {
+            "estado": "procesada",  # Solo ventas confirmadas/impresas
             "$or": [
-                {"usuarioCreacion": usuario_correo},
-                {"usuario": usuario_correo},
-                {"vendedor": usuario_correo}
-            ],
-            "estado": "procesada"  # Filtrar solo ventas procesadas
+                {"sucursal": sucursal.strip()},
+                {"farmacia": sucursal.strip()}
+            ]
         }
         
-        ventas = await ventas_collection.find(filtro).sort("fechaCreacion", -1).to_list(length=None)
+        # Filtrar por rango de fechas
+        if fecha_inicio and fecha_fin:
+            filtro["fecha"] = {"$gte": fecha_inicio, "$lte": fecha_fin}
+        elif fecha_inicio:
+            filtro["fecha"] = {"$gte": fecha_inicio}
+        elif fecha_fin:
+            filtro["fecha"] = {"$lte": fecha_fin}
         
-        # Convertir _id a string y asegurar que descuento_por_divisa esté presente
+        # Limitar resultados
+        limit_val = min(limit or 100, 10000)  # Máximo 10000
+        
+        # Obtener ventas ordenadas por fecha descendente
+        ventas = await ventas_collection.find(filtro).sort("fechaCreacion", -1).limit(limit_val).to_list(length=limit_val)
+        
+        # Formatear respuesta con items detallados
+        resultados = []
         for venta in ventas:
-            venta["_id"] = str(venta["_id"])
-            # Asegurar que descuento_por_divisa esté presente (por defecto 0)
-            if "descuento_por_divisa" not in venta:
-                venta["descuento_por_divisa"] = 0
+            venta_id = str(venta["_id"])
+            
+            # Formatear items con información detallada
+            items_detallados = []
+            productos = venta.get("productos", [])
+            
+            for producto in productos:
+                # Obtener información del producto
+                producto_id = producto.get("productoId") or producto.get("id")
+                codigo = producto.get("codigo", "")
+                nombre = producto.get("nombre", "")
+                descripcion = producto.get("descripcion", "")
+                marca = producto.get("marca", "")
+                cantidad = float(producto.get("cantidad", 0))
+                precio_unitario = float(producto.get("precio", 0)) or float(producto.get("precio_venta", 0)) or float(producto.get("precioUnitario", 0))
+                subtotal = float(producto.get("subtotal", 0)) or (cantidad * precio_unitario)
+                
+                # Usar nombre o descripcion (prioridad: nombre > descripcion)
+                nombre_o_descripcion = nombre if nombre else descripcion
+                
+                item_detallado = {
+                    "producto_id": str(producto_id) if producto_id else "",
+                    "codigo": codigo,
+                    "nombre": nombre_o_descripcion,
+                    "descripcion": descripcion,
+                    "marca": marca,
+                    "cantidad": cantidad,
+                    "precio_unitario": round(precio_unitario, 2),
+                    "subtotal": round(subtotal, 2)
+                }
+                items_detallados.append(item_detallado)
+            
+            # Obtener información del cliente si existe
+            cliente_info = None
+            cliente_id = venta.get("clienteId") or venta.get("cliente")
+            if cliente_id:
+                try:
+                    if isinstance(cliente_id, str):
+                        cliente_obj_id = ObjectId(cliente_id)
+                    else:
+                        cliente_obj_id = cliente_id
+                    
+                    cliente = await clientes_collection.find_one({"_id": cliente_obj_id})
+                    if cliente:
+                        cliente_info = {
+                            "_id": str(cliente["_id"]),
+                            "nombre": cliente.get("nombre", ""),
+                            "cedula": cliente.get("cedula", ""),
+                            "telefono": cliente.get("telefono", ""),
+                            "direccion": cliente.get("direccion", "")
+                        }
+                except (InvalidId, ValueError, Exception) as e:
+                    print(f"⚠️ [PUNTO_VENTA] Error obteniendo cliente {cliente_id}: {e}")
+            
+            # Obtener información de la sucursal
+            sucursal_info = {
+                "id": sucursal.strip(),
+                "nombre": venta.get("sucursal_nombre", sucursal.strip())
+            }
+            
+            # Construir respuesta formateada
+            venta_formateada = {
+                "_id": venta_id,
+                "numero_factura": venta.get("numeroFactura", venta.get("numero_factura", "")),
+                "fecha": venta.get("fecha", ""),
+                "fechaCreacion": venta.get("fechaCreacion", ""),
+                "items": items_detallados,
+                "cliente": cliente_info,
+                "total_bs": float(venta.get("total", 0)) or float(venta.get("totalBs", 0)),
+                "total_usd": float(venta.get("totalUsd", 0)) or float(venta.get("total", 0)),
+                "sucursal": sucursal_info,
+                "cajero": venta.get("usuarioCreacion", venta.get("cajero", "")),
+                "estado": venta.get("estado", "procesada")
+            }
+            
+            resultados.append(venta_formateada)
         
-        print(f"📋 [PUNTO_VENTA] Encontradas {len(ventas)} ventas del usuario")
-        return ventas
+        print(f"📋 [PUNTO_VENTA] Retornando {len(resultados)} ventas con items detallados")
+        return resultados
         
     except Exception as e:
-        print(f"❌ [PUNTO_VENTA] Error obteniendo ventas del usuario: {e}")
+        print(f"❌ [PUNTO_VENTA] Error obteniendo ventas: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
