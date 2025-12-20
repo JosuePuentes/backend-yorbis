@@ -393,7 +393,20 @@ async def crear_venta(
             print(f"📄 [PUNTO_VENTA] Número de factura generado: {numero_factura}")
         
         # DESCONTAR STOCK DEL INVENTARIO Y GUARDAR VENTA CON TRANSACCIÓN (ATOMICIDAD)
+        # IMPORTANTE: Preservar los productos recibidos del frontend
         productos = venta_dict.get("productos", [])
+        
+        # CRÍTICO: Si no hay productos, verificar si vienen como "items"
+        if not productos or len(productos) == 0:
+            items_recibidos = venta_data.get("items", [])
+            if items_recibidos:
+                productos = items_recibidos
+                venta_dict["productos"] = items_recibidos
+                print(f"📦 [PUNTO_VENTA] Productos encontrados en campo 'items', convertidos a 'productos': {len(productos)}")
+            else:
+                print(f"⚠️ [PUNTO_VENTA] ADVERTENCIA: No se encontraron productos ni items en la venta")
+                print(f"   Campos recibidos: {list(venta_data.keys())}")
+        
         costo_inventario_total = 0.0
         
         print(f"📋 [PUNTO_VENTA] Datos de la venta:")
