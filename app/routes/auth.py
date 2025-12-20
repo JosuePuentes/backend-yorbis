@@ -294,63 +294,23 @@ async def actualizar_usuario(
         if "contraseña" in usuario_data and usuario_data["contraseña"]:
             contraseña_plana = str(usuario_data["contraseña"]).strip()
             
-            # Validar longitud mínima primero
+            # Validar longitud mínima
             if len(contraseña_plana) < 4:
                 raise HTTPException(
                     status_code=400,
                     detail="La contraseña debe tener al menos 4 caracteres"
                 )
             
-            # IMPORTANTE: bcrypt tiene un límite de 72 bytes para la contraseña
-            # Truncar a 72 bytes ANTES de hashear para evitar errores
+            # Usar la función hashear_contraseña que maneja el truncado automáticamente
+            from app.core.auth import hashear_contraseña
             try:
-                # Convertir a bytes para verificar longitud exacta
-                contraseña_bytes = contraseña_plana.encode('utf-8')
-                if len(contraseña_bytes) > 72:
-                    # Truncar a 72 bytes de forma segura
-                    # Decodificar de nuevo puede resultar en menos caracteres si hay caracteres multibyte
-                    contraseña_truncada_bytes = contraseña_bytes[:72]
-                    # Intentar decodificar, si falla usar solo los primeros 72 bytes decodificados
-                    try:
-                        contraseña_plana = contraseña_truncada_bytes.decode('utf-8')
-                    except UnicodeDecodeError:
-                        # Si el último byte corta un carácter multibyte, quitar el último byte
-                        contraseña_plana = contraseña_bytes[:71].decode('utf-8', errors='ignore')
-                    print(f"⚠️ [USUARIOS] Contraseña truncada de {len(contraseña_bytes)} bytes a 72 bytes (límite de bcrypt)")
-                else:
-                    # Si en bytes es <= 72, pero en caracteres es > 72, truncar por caracteres
-                    # Esto es raro pero puede pasar con caracteres de 1 byte
-                    if len(contraseña_plana) > 72:
-                        contraseña_plana = contraseña_plana[:72]
-                        print(f"⚠️ [USUARIOS] Contraseña truncada a 72 caracteres (límite de bcrypt)")
-            except Exception as e:
-                print(f"⚠️ [USUARIOS] Error procesando contraseña: {e}, truncando a 72 caracteres")
-                contraseña_plana = contraseña_plana[:72]
-            
-            # Verificar nuevamente que no exceda 72 bytes después del truncado
-            contraseña_final_bytes = contraseña_plana.encode('utf-8')
-            if len(contraseña_final_bytes) > 72:
-                # Último recurso: truncar por bytes y decodificar con errors='ignore'
-                contraseña_plana = contraseña_final_bytes[:72].decode('utf-8', errors='ignore')
-                print(f"⚠️ [USUARIOS] Contraseña truncada nuevamente a 72 bytes (último recurso)")
-            
-            # Hashear la contraseña truncada
-            try:
-                contraseña_hash = pwd_context.hash(contraseña_plana)
+                contraseña_hash = hashear_contraseña(contraseña_plana)
                 update_data["contraseña"] = contraseña_hash
             except Exception as e:
-                # Si aún falla, intentar con bcrypt directamente
-                if "password cannot be longer than 72 bytes" in str(e):
-                    import bcrypt
-                    contraseña_bytes_final = contraseña_plana.encode('utf-8')[:72]
-                    contraseña_hash = bcrypt.hashpw(contraseña_bytes_final, bcrypt.gensalt()).decode('utf-8')
-                    update_data["contraseña"] = contraseña_hash
-                    print(f"⚠️ [USUARIOS] Usando bcrypt directamente para hashear contraseña")
-                else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Error al procesar la contraseña: {str(e)}"
-                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error al procesar la contraseña: {str(e)}"
+                )
         
         # Actualizar permisos si se proporcionan
         if "permisos" in usuario_data:
