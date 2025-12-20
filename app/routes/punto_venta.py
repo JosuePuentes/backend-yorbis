@@ -45,6 +45,7 @@ async def buscar_productos_punto_venta(
     - id: ID del producto
     - codigo: Código del producto
     - nombre: Nombre del producto
+    - descripcion: Descripción del producto (igual que inventarios)
     - costo: Costo del producto
     - utilidad: Utilidad en dinero (precio_venta - costo)
     - porcentaje_utilidad: Porcentaje de utilidad
@@ -54,7 +55,9 @@ async def buscar_productos_punto_venta(
     - stock: Stock disponible (usa existencia como campo principal)
     - existencia: Existencia disponible (campo principal)
     - sucursal: ID de la sucursal
+    - farmacia: ID de la farmacia (igual que inventarios)
     - estado: Estado del producto
+    - marca: Marca del producto
     """
     try:
         inventarios_collection = get_collection("INVENTARIOS")
@@ -78,11 +81,11 @@ async def buscar_productos_punto_venta(
         if query_term:
             # 1. Intentar búsqueda exacta por código (MUY RÁPIDA con índice)
             codigo_filtro = {**filtro, "codigo": query_term.upper()}
-            # OPTIMIZACIÓN: Proyección incluyendo costo y utilidad
+            # OPTIMIZACIÓN: Proyección incluyendo todos los campos necesarios (igual que inventarios)
             producto_exacto = await inventarios_collection.find_one(
                 codigo_filtro,
                 projection={
-                    "_id": 1, "codigo": 1, "nombre": 1,
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,  # Incluir descripción
                     "precio_venta": 1, "precio": 1, "cantidad": 1, "existencia": 1, "stock": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
@@ -124,6 +127,7 @@ async def buscar_productos_punto_venta(
                     "id": str(producto_exacto["_id"]),
                     "codigo": producto_exacto.get("codigo", ""),
                     "nombre": producto_exacto.get("nombre", ""),
+                    "descripcion": producto_exacto.get("descripcion", ""),  # Incluir descripción
                     "costo": round(costo, 2),
                     "utilidad": round(utilidad_actual or 0, 2),
                     "precio": round(precio_venta_actual, 2),
@@ -132,6 +136,7 @@ async def buscar_productos_punto_venta(
                     "stock": float(stock_disponible),     # Mostrar existencia como stock
                     "existencia": float(stock_disponible), # Incluir existencia explícitamente
                     "sucursal": producto_exacto.get("farmacia", sucursal or ""),
+                    "farmacia": producto_exacto.get("farmacia", sucursal or ""),  # Incluir farmacia también
                     "estado": producto_exacto.get("estado", "activo"),
                     "marca": producto_exacto.get("marca") or producto_exacto.get("marca_producto") or ""
                 }
@@ -146,11 +151,11 @@ async def buscar_productos_punto_venta(
         
         # 2. Si no hay término de búsqueda, retornar productos de la sucursal
         if not query_term:
-            # OPTIMIZACIÓN: Proyección incluyendo costo y utilidad
+            # OPTIMIZACIÓN: Proyección incluyendo todos los campos necesarios (igual que inventarios)
             productos = await inventarios_collection.find(
                 filtro,
                 projection={
-                    "_id": 1, "codigo": 1, "nombre": 1,
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,  # Incluir descripción
                     "precio_venta": 1, "precio": 1, "cantidad": 1, "existencia": 1, "stock": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
@@ -187,11 +192,11 @@ async def buscar_productos_punto_venta(
                 }
                 print(f"🔍 [PUNTO_VENTA] Búsqueda AMPLIA (sin *): '{query_term}' - Todos los campos")
             
-            # OPTIMIZACIÓN: Proyección incluyendo costo y utilidad (usa índices optimizados)
+            # OPTIMIZACIÓN: Proyección incluyendo todos los campos necesarios (igual que inventarios)
             productos = await inventarios_collection.find(
                 match_stage,
                 projection={
-                    "_id": 1, "codigo": 1, "nombre": 1, 
+                    "_id": 1, "codigo": 1, "nombre": 1, "descripcion": 1,  # Incluir descripción
                     "precio_venta": 1, "precio": 1, "cantidad": 1, "existencia": 1, "stock": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
@@ -235,6 +240,7 @@ async def buscar_productos_punto_venta(
                 "id": str(producto["_id"]),
                 "codigo": producto.get("codigo", ""),
                 "nombre": producto.get("nombre", ""),
+                "descripcion": producto.get("descripcion", ""),  # Incluir descripción
                 "costo": round(costo, 2),
                 "utilidad": round(utilidad_actual or 0, 2),
                 "precio": round(precio_venta_actual, 2),
@@ -243,6 +249,7 @@ async def buscar_productos_punto_venta(
                 "stock": float(stock_disponible),     # Mostrar existencia como stock
                 "existencia": float(stock_disponible), # Incluir existencia explícitamente
                 "sucursal": producto.get("farmacia", sucursal or ""),
+                "farmacia": producto.get("farmacia", sucursal or ""),  # Incluir farmacia también
                 "estado": producto.get("estado", "activo"),
                 "marca": producto.get("marca") or producto.get("marca_producto") or ""
             }
