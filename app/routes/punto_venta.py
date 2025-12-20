@@ -634,15 +634,22 @@ async def descontar_stock_inventario_con_sesion(
                 raise ValueError(f"Producto no encontrado. ID: {producto_id}, Código: {codigo_busqueda}, Farmacia: {farmacia}")
         
         # Validar stock disponible
+        # Prioridad: existencia > cantidad > stock (según instrucciones, el frontend muestra "Existencia")
+        existencia_actual = float(producto.get("existencia", 0))
         cantidad_actual = float(producto.get("cantidad", 0))
-        stock_actual = float(producto.get("stock", cantidad_actual))  # Usar stock si existe, sino cantidad
-        existencia_actual = float(producto.get("existencia", cantidad_actual))  # Usar existencia si existe
+        stock_actual = float(producto.get("stock", 0))
         
-        # Usar el mayor valor disponible entre cantidad, stock y existencia
-        cantidad_disponible = max(cantidad_actual, stock_actual, existencia_actual)
+        # Usar existencia como campo principal, si no existe usar cantidad
+        if existencia_actual > 0:
+            cantidad_disponible = existencia_actual
+        elif cantidad_actual > 0:
+            cantidad_disponible = cantidad_actual
+        else:
+            cantidad_disponible = stock_actual if stock_actual > 0 else 0
         
         print(f"📊 [INVENTARIO] Producto: {producto.get('codigo', 'N/A')} - {producto.get('nombre', 'N/A')}")
-        print(f"📊 [INVENTARIO] Cantidad disponible: {cantidad_disponible} (cantidad: {cantidad_actual}, stock: {stock_actual}, existencia: {existencia_actual})")
+        print(f"📊 [INVENTARIO] Valores actuales - Existencia: {existencia_actual}, Cantidad: {cantidad_actual}, Stock: {stock_actual}")
+        print(f"📊 [INVENTARIO] Cantidad disponible: {cantidad_disponible}")
         print(f"📊 [INVENTARIO] Cantidad a descontar: {cantidad_vendida}")
         
         if cantidad_disponible < cantidad_vendida:
@@ -680,17 +687,14 @@ async def descontar_stock_inventario_con_sesion(
                     cantidad_restante = 0
             
             # Actualizar producto con lotes actualizados
+            # IMPORTANTE: Descontar la misma cantidad de cantidad, existencia y stock
             nueva_cantidad = cantidad_disponible - cantidad_vendida
             update_data = {
                 "cantidad": nueva_cantidad,
+                "existencia": nueva_cantidad,  # Siempre actualizar existencia
+                "stock": nueva_cantidad,       # Siempre actualizar stock
                 "lotes": lotes_actualizados
             }
-            
-            # Actualizar también stock y existencia si existen
-            if "stock" in producto:
-                update_data["stock"] = nueva_cantidad
-            if "existencia" in producto:
-                update_data["existencia"] = nueva_cantidad
             
             await inventarios_collection.update_one(
                 {"_id": producto_object_id},
@@ -703,13 +707,12 @@ async def descontar_stock_inventario_con_sesion(
             costo_total = cantidad_vendida * costo_promedio
             nueva_cantidad = cantidad_disponible - cantidad_vendida
             
-            update_data = {"cantidad": nueva_cantidad}
-            
-            # Actualizar también stock y existencia si existen
-            if "stock" in producto:
-                update_data["stock"] = nueva_cantidad
-            if "existencia" in producto:
-                update_data["existencia"] = nueva_cantidad
+            # IMPORTANTE: Descontar la misma cantidad de cantidad, existencia y stock
+            update_data = {
+                "cantidad": nueva_cantidad,
+                "existencia": nueva_cantidad,  # Siempre actualizar existencia
+                "stock": nueva_cantidad         # Siempre actualizar stock
+            }
             
             await inventarios_collection.update_one(
                 {"_id": producto_object_id},
@@ -771,10 +774,18 @@ async def descontar_stock_inventario(producto_id: str, cantidad_vendida: float, 
                 raise ValueError(f"Producto no encontrado. ID: {producto_id}, Código: {codigo_busqueda}, Farmacia: {farmacia}")
         
         # Validar stock disponible
+        # Prioridad: existencia > cantidad > stock (según instrucciones, el frontend muestra "Existencia")
+        existencia_actual = float(producto.get("existencia", 0))
         cantidad_actual = float(producto.get("cantidad", 0))
-        stock_actual = float(producto.get("stock", cantidad_actual))
-        existencia_actual = float(producto.get("existencia", cantidad_actual))
-        cantidad_disponible = max(cantidad_actual, stock_actual, existencia_actual)
+        stock_actual = float(producto.get("stock", 0))
+        
+        # Usar existencia como campo principal, si no existe usar cantidad
+        if existencia_actual > 0:
+            cantidad_disponible = existencia_actual
+        elif cantidad_actual > 0:
+            cantidad_disponible = cantidad_actual
+        else:
+            cantidad_disponible = stock_actual if stock_actual > 0 else 0
         
         if cantidad_disponible < cantidad_vendida:
             raise ValueError(f"Stock insuficiente. Disponible: {cantidad_disponible}, Requerido: {cantidad_vendida}")
@@ -810,17 +821,14 @@ async def descontar_stock_inventario(producto_id: str, cantidad_vendida: float, 
                     cantidad_restante = 0
             
             # Actualizar producto con lotes actualizados
+            # IMPORTANTE: Descontar la misma cantidad de cantidad, existencia y stock
             nueva_cantidad = cantidad_disponible - cantidad_vendida
             update_data = {
                 "cantidad": nueva_cantidad,
+                "existencia": nueva_cantidad,  # Siempre actualizar existencia
+                "stock": nueva_cantidad,       # Siempre actualizar stock
                 "lotes": lotes_actualizados
             }
-            
-            # Actualizar también stock y existencia si existen
-            if "stock" in producto:
-                update_data["stock"] = nueva_cantidad
-            if "existencia" in producto:
-                update_data["existencia"] = nueva_cantidad
             
             await inventarios_collection.update_one(
                 {"_id": producto_object_id},
@@ -832,13 +840,12 @@ async def descontar_stock_inventario(producto_id: str, cantidad_vendida: float, 
             costo_total = cantidad_vendida * costo_promedio
             nueva_cantidad = cantidad_disponible - cantidad_vendida
             
-            update_data = {"cantidad": nueva_cantidad}
-            
-            # Actualizar también stock y existencia si existen
-            if "stock" in producto:
-                update_data["stock"] = nueva_cantidad
-            if "existencia" in producto:
-                update_data["existencia"] = nueva_cantidad
+            # IMPORTANTE: Descontar la misma cantidad de cantidad, existencia y stock
+            update_data = {
+                "cantidad": nueva_cantidad,
+                "existencia": nueva_cantidad,  # Siempre actualizar existencia
+                "stock": nueva_cantidad         # Siempre actualizar stock
+            }
             
             await inventarios_collection.update_one(
                 {"_id": producto_object_id},
