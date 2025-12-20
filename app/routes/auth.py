@@ -1829,7 +1829,7 @@ async def eliminar_item_inventario_por_id(
         # Limpiar inventario_id si está vacío
         inventario_id_clean = inventario_id.strip() if inventario_id else ""
         
-        print(f"🗑️ [INVENTARIOS] Eliminando item por ID: {item_id} de inventario: '{inventario_id_clean}'")
+        print(f"🗑️ [INVENTARIOS] Eliminando item por ID: {item_id} (sin restricciones de farmacia)")
         
         # Validar que item_id sea un ObjectId válido
         try:
