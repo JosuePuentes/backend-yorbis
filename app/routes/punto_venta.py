@@ -497,7 +497,13 @@ async def crear_venta(
                     venta_dict["estado"] = "procesada"
                     
                     # IMPORTANTE: Asegurar que los items/productos se guarden completos
-                    # Los productos deben estar en venta_dict["productos"]
+                    # CRÍTICO: Preservar los productos en venta_dict antes de guardar
+                    # Asegurar que venta_dict["productos"] tenga los productos
+                    if "productos" not in venta_dict or not venta_dict.get("productos"):
+                        # Si no están en venta_dict, usar la variable productos que ya procesamos
+                        venta_dict["productos"] = productos
+                        print(f"📦 [PUNTO_VENTA] Productos restaurados en venta_dict antes de guardar: {len(productos)}")
+                    
                     productos_para_guardar = venta_dict.get('productos', [])
                     productos_count = len(productos_para_guardar)
                     numero_factura = venta_dict.get('numeroFactura') or venta_dict.get('numero_factura', 'N/A')
@@ -515,6 +521,12 @@ async def crear_venta(
                         print(f"   Campos en venta_dict: {list(venta_dict.keys())}")
                         print(f"   venta_dict.get('productos'): {venta_dict.get('productos')}")
                         print(f"   venta_dict.get('items'): {venta_dict.get('items')}")
+                        print(f"   Variable productos (fuera de venta_dict): {len(productos)} items")
+                        # Intentar restaurar desde la variable productos
+                        if productos:
+                            venta_dict["productos"] = productos
+                            productos_count = len(productos)
+                            print(f"📦 [PUNTO_VENTA] Productos restaurados desde variable: {productos_count}")
                     else:
                         print(f"✅ [PUNTO_VENTA] Productos confirmados antes de guardar: {productos_count}")
                         # Mostrar resumen de productos
