@@ -1800,6 +1800,182 @@ async def actualizar_item_inventario(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.delete("/inventarios/{inventario_id}/items/{item_id}")
+async def eliminar_item_inventario_por_id(
+    inventario_id: str,
+    item_id: str,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Elimina un item del inventario por su ID.
+    
+    Args:
+        inventario_id: ID de la farmacia o inventario (puede estar vacío)
+        item_id: ID del item a eliminar
+        usuario: Usuario autenticado
+    
+    Returns:
+        Mensaje de confirmación de eliminación
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        
+        # Limpiar inventario_id si está vacío
+        inventario_id_clean = inventario_id.strip() if inventario_id else ""
+        
+        print(f"🗑️ [INVENTARIOS] Eliminando item por ID: {item_id} de inventario: '{inventario_id_clean}'")
+        
+        # Validar que item_id sea un ObjectId válido
+        try:
+            item_object_id = ObjectId(item_id)
+        except (InvalidId, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"ID de item inválido: {item_id}"
+            )
+        
+        # Buscar el item antes de eliminarlo
+        item = await collection.find_one({"_id": item_object_id})
+        
+        if not item:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Item con ID {item_id} no encontrado"
+            )
+        
+        # Verificar que pertenezca al inventario si se especificó
+        if inventario_id_clean:
+            item_farmacia = item.get("farmacia", "")
+            if item_farmacia != inventario_id_clean:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El item pertenece a la farmacia '{item_farmacia}', no a '{inventario_id_clean}'"
+                )
+        
+        # Información del item antes de eliminar
+        codigo_item = item.get("codigo", "N/A")
+        nombre_item = item.get("nombre", "N/A")
+        farmacia_item = item.get("farmacia", "N/A")
+        
+        print(f"   Item encontrado: {codigo_item} - {nombre_item} (Farmacia: {farmacia_item})")
+        
+        # Eliminar el item
+        resultado = await collection.delete_one({"_id": item_object_id})
+        
+        if resultado.deleted_count == 0:
+            raise HTTPException(
+                status_code=500,
+                detail="No se pudo eliminar el item (deleted_count = 0)"
+            )
+        
+        print(f"✅ [INVENTARIOS] Item eliminado exitosamente: {item_id} ({codigo_item})")
+        
+        return {
+            "message": "Item eliminado exitosamente",
+            "item_id": item_id,
+            "codigo": codigo_item,
+            "nombre": nombre_item,
+            "deleted": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error eliminando item por ID: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/inventarios/{inventario_id}/items/codigo/{codigo}")
+async def eliminar_item_inventario_por_codigo(
+    inventario_id: str,
+    codigo: str,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Elimina un item del inventario por su código.
+    
+    Args:
+        inventario_id: ID de la farmacia o inventario (puede estar vacío)
+        codigo: Código del item a eliminar
+        usuario: Usuario autenticado
+    
+    Returns:
+        Mensaje de confirmación de eliminación
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        
+        # Limpiar inventario_id si está vacío
+        inventario_id_clean = inventario_id.strip() if inventario_id else ""
+        
+        print(f"🗑️ [INVENTARIOS] Eliminando item por código: {codigo} de inventario: '{inventario_id_clean}'")
+        
+        # Construir filtro de búsqueda
+        filtro = {
+            "codigo": {"$regex": f"^{re.escape(codigo)}$", "$options": "i"}  # Case insensitive
+        }
+        
+        # Si se especificó inventario_id, filtrar por farmacia
+        if inventario_id_clean:
+            filtro["farmacia"] = inventario_id_clean
+        
+        # Buscar el item antes de eliminarlo
+        item = await collection.find_one(filtro)
+        
+        if not item:
+            # Buscar sin filtro de farmacia para dar mejor mensaje de error
+            item_debug = await collection.find_one({
+                "codigo": {"$regex": f"^{re.escape(codigo)}$", "$options": "i"}
+            })
+            
+            if item_debug:
+                farmacia_item = item_debug.get("farmacia", "N/A")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Item con código '{codigo}' existe pero pertenece a la farmacia '{farmacia_item}', no a '{inventario_id_clean}'"
+                )
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Item con código '{codigo}' no encontrado"
+                )
+        
+        # Información del item antes de eliminar
+        item_id = str(item["_id"])
+        codigo_item = item.get("codigo", "N/A")
+        nombre_item = item.get("nombre", "N/A")
+        farmacia_item = item.get("farmacia", "N/A")
+        
+        print(f"   Item encontrado: {codigo_item} - {nombre_item} (ID: {item_id}, Farmacia: {farmacia_item})")
+        
+        # Eliminar el item
+        resultado = await collection.delete_one({"_id": item["_id"]})
+        
+        if resultado.deleted_count == 0:
+            raise HTTPException(
+                status_code=500,
+                detail="No se pudo eliminar el item (deleted_count = 0)"
+            )
+        
+        print(f"✅ [INVENTARIOS] Item eliminado exitosamente por código: {codigo} (ID: {item_id})")
+        
+        return {
+            "message": "Item eliminado exitosamente",
+            "item_id": item_id,
+            "codigo": codigo_item,
+            "nombre": nombre_item,
+            "deleted": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [INVENTARIOS] Error eliminando item por código: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/inventarios/buscar")
 async def buscar_productos_inventario_modal(
     q: Optional[str] = Query(None, description="Término de búsqueda (código, nombre, descripción)"),
