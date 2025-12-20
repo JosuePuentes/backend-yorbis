@@ -319,8 +319,10 @@ async def crear_venta(
         fecha_venta = venta_dict.get("fecha", fecha_actual.strftime("%Y-%m-%d"))
         farmacia = venta_dict.get("sucursal") or venta_dict.get("farmacia")
         
-        # IMPORTANTE: Establecer estado como "procesada" al crear la venta
+        # IMPORTANTE: Establecer estado como "procesada" EXACTAMENTE (no "confirmada" ni "impresa")
+        # Este estado es crítico para que las ventas aparezcan en el resumen
         venta_dict["estado"] = "procesada"
+        print(f"📋 [PUNTO_VENTA] Estado de venta establecido como: 'procesada'")
         
         if not farmacia:
             raise HTTPException(status_code=400, detail="La venta debe tener una sucursal (sucursal o farmacia)")
@@ -452,9 +454,20 @@ async def crear_venta(
                                 )
                     
                     # 2. Guardar venta en la base de datos (dentro de la transacción)
+                    # IMPORTANTE: Asegurar que el estado sea "procesada" antes de guardar
+                    venta_dict["estado"] = "procesada"
+                    
+                    # IMPORTANTE: Asegurar que los items se guarden completos
+                    # Los productos ya vienen en venta_dict["productos"] desde el frontend
+                    print(f"📋 [PUNTO_VENTA] Guardando venta con {len(venta_dict.get('productos', []))} productos")
+                    print(f"   Estado: {venta_dict.get('estado')}")
+                    print(f"   Número factura: {venta_dict.get('numeroFactura') or venta_dict.get('numero_factura', 'N/A')}")
+                    
                     ventas_collection = get_collection("VENTAS")
                     resultado = await ventas_collection.insert_one(venta_dict, session=session)
                     venta_id = str(resultado.inserted_id)
+                    
+                    print(f"✅ [PUNTO_VENTA] Venta guardada con ID: {venta_id}")
                     
                     # 3. Si todo funciona, confirmar la transacción
                     print(f"🔄 [PUNTO_VENTA] Confirmando transacción...")
@@ -607,13 +620,16 @@ async def obtener_ventas_usuario(
         clientes_collection = get_collection("CLIENTES")
         
         # Construir filtro
+        # IMPORTANTE: Filtrar EXACTAMENTE por estado "procesada" (no usar $in con otros estados)
+        # Este filtro es crítico para que las ventas aparezcan en el resumen
         filtro = {
-            "estado": "procesada",  # Solo ventas confirmadas/impresas
+            "estado": "procesada",  # EXACTAMENTE "procesada" (no "confirmada" ni "impresa")
             "$or": [
                 {"sucursal": sucursal.strip()},
                 {"farmacia": sucursal.strip()}
             ]
         }
+        print(f"📋 [PUNTO_VENTA] Filtro aplicado: estado='procesada', sucursal={sucursal}")
         
         # Filtrar por rango de fechas
         if fecha_inicio and fecha_fin:
