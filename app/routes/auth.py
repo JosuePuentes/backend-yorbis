@@ -1572,6 +1572,22 @@ async def _actualizar_item_inventario_internal(
     # El item_id puede venir en formato "id_codigo" o solo "id"
     item_id_real = item_id.split("_")[0] if "_" in item_id else item_id
     
+    # Determinar el ID de farmacia correcto
+    farmacia_id = None
+    if id_clean:
+        # Verificar si id_clean es un ObjectId (ID del inventario)
+        try:
+            inventario_object_id = ObjectId(id_clean)
+            # Si es ObjectId, buscar el inventario para obtener su farmacia
+            inventario = await collection.find_one({"_id": inventario_object_id})
+            if inventario:
+                farmacia_id = inventario.get("farmacia")
+                print(f"🔍 [INVENTARIOS] ID de inventario detectado, farmacia encontrada: {farmacia_id}")
+        except (InvalidId, ValueError):
+            # Si no es ObjectId, asumir que es el ID de la farmacia directamente
+            farmacia_id = id_clean
+            print(f"🔍 [INVENTARIOS] ID de farmacia detectado: {farmacia_id}")
+    
     try:
         item_object_id = ObjectId(item_id_real)
     except (InvalidId, ValueError):
@@ -1579,19 +1595,29 @@ async def _actualizar_item_inventario_internal(
         if "_" in item_id:
             codigo = "_".join(item_id.split("_")[1:])
             filtro = {"codigo": codigo}
-            if id_clean:
-                filtro["farmacia"] = id_clean
+            if farmacia_id:
+                filtro["farmacia"] = farmacia_id
         else:
             filtro = {"codigo": item_id}
-            if id_clean:
-                filtro["farmacia"] = id_clean
+            if farmacia_id:
+                filtro["farmacia"] = farmacia_id
+        
+        print(f"🔍 [INVENTARIOS] Buscando item por código con filtro: {filtro}")
         
         # Buscar el item
         item = await collection.find_one(filtro)
         if not item:
-            raise HTTPException(status_code=404, detail="Item de inventario no encontrado")
+            # Si no se encuentra con filtro de farmacia, intentar sin filtro
+            if farmacia_id:
+                filtro_sin_farmacia = {"codigo": item_id if not "_" in item_id else "_".join(item_id.split("_")[1:])}
+                print(f"🔍 [INVENTARIOS] No encontrado con filtro de farmacia, intentando sin filtro: {filtro_sin_farmacia}")
+                item = await collection.find_one(filtro_sin_farmacia)
+            
+            if not item:
+                raise HTTPException(status_code=404, detail=f"Item de inventario no encontrado (código: {item_id}, farmacia: {farmacia_id})")
         
         item_object_id = item["_id"]
+        print(f"✅ [INVENTARIOS] Item encontrado: {item_object_id}")
     
     # No permitir actualizar el _id
     if "_id" in data:
