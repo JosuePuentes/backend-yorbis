@@ -1915,37 +1915,22 @@ async def eliminar_item_inventario_por_codigo(
         # Limpiar inventario_id si está vacío
         inventario_id_clean = inventario_id.strip() if inventario_id else ""
         
-        print(f"🗑️ [INVENTARIOS] Eliminando item por código: {codigo} de inventario: '{inventario_id_clean}'")
+        print(f"🗑️ [INVENTARIOS] Eliminando item por código: {codigo} (sin restricciones de farmacia)")
         
-        # Construir filtro de búsqueda
+        # IMPORTANTE: Buscar el producto por código SIN filtrar por farmacia
+        # Esto permite eliminar cualquier producto sin importar a qué farmacia pertenezca
         filtro = {
             "codigo": {"$regex": f"^{re.escape(codigo)}$", "$options": "i"}  # Case insensitive
         }
         
-        # Si se especificó inventario_id, filtrar por farmacia
-        if inventario_id_clean:
-            filtro["farmacia"] = inventario_id_clean
-        
-        # Buscar el item antes de eliminarlo
+        # Buscar el item antes de eliminarlo (sin restricción de farmacia)
         item = await collection.find_one(filtro)
         
         if not item:
-            # Buscar sin filtro de farmacia para dar mejor mensaje de error
-            item_debug = await collection.find_one({
-                "codigo": {"$regex": f"^{re.escape(codigo)}$", "$options": "i"}
-            })
-            
-            if item_debug:
-                farmacia_item = item_debug.get("farmacia", "N/A")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Item con código '{codigo}' existe pero pertenece a la farmacia '{farmacia_item}', no a '{inventario_id_clean}'"
-                )
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Item con código '{codigo}' no encontrado"
-                )
+            raise HTTPException(
+                status_code=404,
+                detail=f"Item con código '{codigo}' no encontrado"
+            )
         
         # Información del item antes de eliminar
         item_id = str(item["_id"])
