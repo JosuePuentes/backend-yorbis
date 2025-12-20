@@ -50,7 +50,9 @@ async def buscar_productos_punto_venta(
     - porcentaje_utilidad: Porcentaje de utilidad
     - precio: Precio de venta
     - precio_venta: Precio de venta (alias de precio)
-    - cantidad/stock: Stock disponible
+    - cantidad: Stock disponible (usa existencia como campo principal)
+    - stock: Stock disponible (usa existencia como campo principal)
+    - existencia: Existencia disponible (campo principal)
     - sucursal: ID de la sucursal
     - estado: Estado del producto
     """
@@ -81,7 +83,7 @@ async def buscar_productos_punto_venta(
                 codigo_filtro,
                 projection={
                     "_id": 1, "codigo": 1, "nombre": 1,
-                    "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "precio_venta": 1, "precio": 1, "cantidad": 1, "existencia": 1, "stock": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
                 }
@@ -105,7 +107,18 @@ async def buscar_productos_punto_venta(
                     else:
                         utilidad_actual = 0
                 
-                cantidad = producto_exacto.get("cantidad", 0)
+                # Obtener valores de stock (prioridad: existencia > cantidad > stock)
+                existencia = float(producto_exacto.get("existencia", 0))
+                cantidad = float(producto_exacto.get("cantidad", 0))
+                stock = float(producto_exacto.get("stock", 0))
+                
+                # Usar existencia como campo principal (igual que en verinventario)
+                if existencia > 0:
+                    stock_disponible = existencia
+                elif cantidad > 0:
+                    stock_disponible = cantidad
+                else:
+                    stock_disponible = stock if stock > 0 else 0
                 
                 resultado = {
                     "id": str(producto_exacto["_id"]),
@@ -115,8 +128,9 @@ async def buscar_productos_punto_venta(
                     "utilidad": round(utilidad_actual or 0, 2),
                     "precio": round(precio_venta_actual, 2),
                     "precio_venta": round(precio_venta_actual, 2),
-                    "cantidad": float(cantidad),
-                    "stock": float(cantidad),
+                    "cantidad": float(stock_disponible),  # Mostrar existencia como cantidad
+                    "stock": float(stock_disponible),     # Mostrar existencia como stock
+                    "existencia": float(stock_disponible), # Incluir existencia explícitamente
                     "sucursal": producto_exacto.get("farmacia", sucursal or ""),
                     "estado": producto_exacto.get("estado", "activo"),
                     "marca": producto_exacto.get("marca") or producto_exacto.get("marca_producto") or ""
@@ -137,7 +151,7 @@ async def buscar_productos_punto_venta(
                 filtro,
                 projection={
                     "_id": 1, "codigo": 1, "nombre": 1,
-                    "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "precio_venta": 1, "precio": 1, "cantidad": 1, "existencia": 1, "stock": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
                 }
@@ -178,7 +192,7 @@ async def buscar_productos_punto_venta(
                 match_stage,
                 projection={
                     "_id": 1, "codigo": 1, "nombre": 1, 
-                    "precio_venta": 1, "precio": 1, "cantidad": 1,
+                    "precio_venta": 1, "precio": 1, "cantidad": 1, "existencia": 1, "stock": 1,
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
                 }
@@ -204,7 +218,18 @@ async def buscar_productos_punto_venta(
                 else:
                     utilidad_actual = 0
             
-            cantidad = producto.get("cantidad", 0)
+            # Obtener valores de stock (prioridad: existencia > cantidad > stock)
+            existencia = float(producto.get("existencia", 0))
+            cantidad = float(producto.get("cantidad", 0))
+            stock = float(producto.get("stock", 0))
+            
+            # Usar existencia como campo principal (igual que en verinventario)
+            if existencia > 0:
+                stock_disponible = existencia
+            elif cantidad > 0:
+                stock_disponible = cantidad
+            else:
+                stock_disponible = stock if stock > 0 else 0
             
             resultado = {
                 "id": str(producto["_id"]),
@@ -214,8 +239,9 @@ async def buscar_productos_punto_venta(
                 "utilidad": round(utilidad_actual or 0, 2),
                 "precio": round(precio_venta_actual, 2),
                 "precio_venta": round(precio_venta_actual, 2),
-                "cantidad": float(cantidad),
-                "stock": float(cantidad),
+                "cantidad": float(stock_disponible),  # Mostrar existencia como cantidad
+                "stock": float(stock_disponible),     # Mostrar existencia como stock
+                "existencia": float(stock_disponible), # Incluir existencia explícitamente
                 "sucursal": producto.get("farmacia", sucursal or ""),
                 "estado": producto.get("estado", "activo"),
                 "marca": producto.get("marca") or producto.get("marca_producto") or ""
