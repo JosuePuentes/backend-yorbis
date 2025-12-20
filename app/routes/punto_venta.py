@@ -483,17 +483,30 @@ async def crear_venta(
                     # IMPORTANTE: Asegurar que el estado sea "procesada" antes de guardar
                     venta_dict["estado"] = "procesada"
                     
-                    # IMPORTANTE: Asegurar que los items se guarden completos
-                    # Los productos ya vienen en venta_dict["productos"] desde el frontend
-                    productos_count = len(venta_dict.get('productos', []))
+                    # IMPORTANTE: Asegurar que los items/productos se guarden completos
+                    # Los productos deben estar en venta_dict["productos"]
+                    productos_para_guardar = venta_dict.get('productos', [])
+                    productos_count = len(productos_para_guardar)
                     numero_factura = venta_dict.get('numeroFactura') or venta_dict.get('numero_factura', 'N/A')
                     
                     print(f"📋 [PUNTO_VENTA] Guardando venta:")
                     print(f"   - Estado: '{venta_dict.get('estado')}' (debe ser 'procesada')")
                     print(f"   - Número factura: {numero_factura}")
-                    print(f"   - Productos: {productos_count}")
+                    print(f"   - Productos a guardar: {productos_count}")
                     print(f"   - Sucursal/Farmacia: {farmacia}")
                     print(f"   - Fecha: {fecha_venta}")
+                    
+                    # CRÍTICO: Verificar que los productos estén presentes
+                    if productos_count == 0:
+                        print(f"⚠️ [PUNTO_VENTA] ADVERTENCIA: No hay productos en venta_dict antes de guardar")
+                        print(f"   Campos en venta_dict: {list(venta_dict.keys())}")
+                        print(f"   venta_dict.get('productos'): {venta_dict.get('productos')}")
+                        print(f"   venta_dict.get('items'): {venta_dict.get('items')}")
+                    else:
+                        print(f"✅ [PUNTO_VENTA] Productos confirmados antes de guardar: {productos_count}")
+                        # Mostrar resumen de productos
+                        for idx, prod in enumerate(productos_para_guardar[:3], 1):
+                            print(f"      Producto {idx}: {prod.get('codigo', 'N/A')} - {prod.get('nombre', 'N/A')} x{prod.get('cantidad', 0)}")
                     
                     # Verificar que el estado sea exactamente "procesada"
                     if venta_dict.get("estado") != "procesada":
@@ -507,13 +520,24 @@ async def crear_venta(
                     # Verificar que se guardó correctamente
                     venta_guardada = await ventas_collection.find_one({"_id": resultado.inserted_id}, session=session)
                     estado_guardado = venta_guardada.get("estado") if venta_guardada else "N/A"
+                    productos_guardados = venta_guardada.get("productos", []) if venta_guardada else []
+                    productos_guardados_count = len(productos_guardados)
                     
                     print(f"✅ [PUNTO_VENTA] Venta guardada con ID: {venta_id}")
                     print(f"   - Estado guardado en BD: '{estado_guardado}' (debe ser 'procesada')")
                     print(f"   - Número factura guardado: {venta_guardada.get('numeroFactura') or venta_guardada.get('numero_factura', 'N/A') if venta_guardada else 'N/A'}")
+                    print(f"   - Productos guardados en BD: {productos_guardados_count} (debe ser {productos_count})")
                     
                     if estado_guardado != "procesada":
                         print(f"⚠️ [PUNTO_VENTA] ADVERTENCIA: Estado guardado no es 'procesada': '{estado_guardado}'")
+                    
+                    if productos_guardados_count == 0:
+                        print(f"❌ [PUNTO_VENTA] ERROR CRÍTICO: Los productos NO se guardaron en la BD!")
+                        print(f"   Se intentaron guardar {productos_count} productos pero se guardaron {productos_guardados_count}")
+                        print(f"   Esto causará que la venta no aparezca en el resumen")
+                    elif productos_guardados_count != productos_count:
+                        print(f"⚠️ [PUNTO_VENTA] ADVERTENCIA: Cantidad de productos no coincide")
+                        print(f"   Esperados: {productos_count}, Guardados: {productos_guardados_count}")
                     
                     # 3. Si todo funciona, confirmar la transacción
                     print(f"🔄 [PUNTO_VENTA] Confirmando transacción...")
