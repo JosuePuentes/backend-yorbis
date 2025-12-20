@@ -2249,12 +2249,16 @@ async def crear_producto_inventario(
         
         # Crear nuevo producto
         # IMPORTANTE: Asegurar que el estado sea "activo" explícitamente
+        # IMPORTANTE: Inicializar cantidad, existencia y stock con el mismo valor para sincronización
+        cantidad_inicial = float(datos_producto.get("cantidad", 0))
         nuevo_producto = {
             "farmacia": str(farmacia).strip(),
             "nombre": nombre,
             "descripcion": datos_producto.get("descripcion", "").strip(),
             "marca": datos_producto.get("marca", "").strip(),
-            "cantidad": float(datos_producto.get("cantidad", 0)),
+            "cantidad": cantidad_inicial,
+            "existencia": cantidad_inicial,  # IMPORTANTE: Sincronizar con cantidad
+            "stock": cantidad_inicial,      # IMPORTANTE: Sincronizar con cantidad
             "costo": round(costo, 2),
             "precio_venta": round(precio_venta_final, 2),
             "precio": round(precio_venta_final, 2),
@@ -2286,6 +2290,11 @@ async def crear_producto_inventario(
         print(f"✅ [INVENTARIOS] Producto recuperado de BD: {producto_creado.get('nombre', 'N/A')}")
         
         # Formatear respuesta
+        # IMPORTANTE: Incluir existencia y stock en la respuesta para sincronización
+        cantidad_respuesta = float(producto_creado.get("cantidad", 0))
+        existencia_respuesta = float(producto_creado.get("existencia", cantidad_respuesta))
+        stock_respuesta = float(producto_creado.get("stock", cantidad_respuesta))
+        
         producto_formateado = {
             "id": producto_id,
             "_id": producto_id,
@@ -2293,7 +2302,9 @@ async def crear_producto_inventario(
             "nombre": producto_creado.get("nombre", ""),
             "descripcion": producto_creado.get("descripcion", ""),
             "marca": producto_creado.get("marca", ""),
-            "cantidad": float(producto_creado.get("cantidad", 0)),
+            "cantidad": cantidad_respuesta,
+            "existencia": existencia_respuesta,  # IMPORTANTE: Incluir existencia
+            "stock": stock_respuesta,            # IMPORTANTE: Incluir stock
             "costo": round(float(producto_creado.get("costo", 0)), 2),
             "precio_venta": round(float(producto_creado.get("precio_venta", 0)), 2),
             "precio": round(float(producto_creado.get("precio_venta", 0)), 2),

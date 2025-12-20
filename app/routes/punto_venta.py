@@ -14,7 +14,7 @@ router = APIRouter()
 
 @router.get("/punto-venta/productos/buscar")
 async def buscar_productos_punto_venta(
-    q: str = Query(..., description="Término de búsqueda"),
+    q: Optional[str] = Query("", description="Término de búsqueda (opcional, si está vacío retorna todos los productos)"),
     sucursal: Optional[str] = Query(None, description="ID de la sucursal (farmacia)"),
     usuario_actual: dict = Depends(get_current_user)
 ):
@@ -149,9 +149,11 @@ async def buscar_productos_punto_venta(
                 
                 return [resultado]
         
-        # 2. Si no hay término de búsqueda, retornar productos de la sucursal
+        # 2. Si no hay término de búsqueda, retornar TODOS los productos de la sucursal
+        # IMPORTANTE: Esto permite que el frontend cargue todos los productos al abrir el módulo
         if not query_term:
             # OPTIMIZACIÓN: Proyección incluyendo todos los campos necesarios (igual que inventarios)
+            # Límite aumentado a 200 para mostrar más productos (puede ajustarse según necesidad)
             productos = await inventarios_collection.find(
                 filtro,
                 projection={
@@ -160,7 +162,8 @@ async def buscar_productos_punto_venta(
                     "costo": 1, "utilidad": 1, "porcentaje_utilidad": 1,
                     "farmacia": 1, "estado": 1, "marca": 1, "marca_producto": 1
                 }
-            ).sort("nombre", 1).limit(30).to_list(length=30)
+            ).sort("nombre", 1).limit(200).to_list(length=200)
+            print(f"📋 [PUNTO_VENTA] Retornando TODOS los productos (sin búsqueda) - Total: {len(productos)}")
         else:
             # Escapar el término para regex
             escaped_query = re.escape(query_term)
