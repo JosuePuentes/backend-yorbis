@@ -1264,15 +1264,17 @@ async def obtener_items_inventario_sin_id(
         if farmacia and farmacia.strip():
             filtro["farmacia"] = farmacia.strip()
         
-        # Limitar el límite a máximo 500 para mostrar más productos
-        # Si no se especifica limit, usar 500 para mostrar todos los productos activos
-        limit_val = min(limit or 500, 500)
+        # OPTIMIZACIÓN CRÍTICA: Límite inicial reducido para carga rápida
+        # Si no se especifica limit, usar 100 para carga inicial rápida
+        # El frontend puede cargar más después si es necesario
+        limit_val = min(limit or 100, 500)  # Por defecto 100, máximo 500
         skip_val = max(skip or 0, 0)
         
         print(f"🔍 [INVENTARIOS] Obteniendo items (sin ID - PAGINADO) - limit: {limit_val}, skip: {skip_val}, farmacia: {farmacia}")
         
         # OPTIMIZACIÓN MÁXIMA: Proyección mínima, solo activos, paginación, límite reducido
-        # Usa índice en estado + nombre para ordenamiento rápido
+        # Usa índice compuesto (farmacia + estado + nombre) para ordenamiento ultra rápido
+        # Este índice cubre exactamente la consulta: filtro por farmacia + estado + orden por nombre
         inventarios = await collection.find(
             filtro,
             projection=proyeccion_minima
@@ -1331,12 +1333,14 @@ async def obtener_items_inventario_sin_id(
             
             resultados.append(resultado)
         
-        # Contar total de productos (solo si es la primera página para no ralentizar)
+        # OPTIMIZACIÓN CRÍTICA: NO contar total para carga más rápida
+        # El conteo puede ser muy lento con muchos productos (puede tomar varios segundos)
+        # El frontend puede calcular el total si lo necesita, o cargar más productos con paginación
         total_count = None
-        if skip_val == 0:
-            total_count = await collection.count_documents(filtro)
+        # if skip_val == 0:
+        #     total_count = await collection.count_documents(filtro)
         
-        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (PAGINADO - sin ID) - Total: {total_count}")
+        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (PAGINADO - sin ID) - Carga optimizada (sin conteo)")
         
         # IMPORTANTE: Retornar array directo para compatibilidad con frontend
         # Si el frontend necesita paginación, puede usar los parámetros limit y skip
@@ -1457,15 +1461,17 @@ async def obtener_items_inventario(
             
             resultados.append(resultado)
         
-        # Contar total de productos (solo si es la primera página y es farmacia)
+        # OPTIMIZACIÓN CRÍTICA: NO contar total para carga más rápida
+        # El conteo puede ser muy lento con muchos productos (puede tomar varios segundos)
+        # El frontend puede calcular el total si lo necesita, o cargar más productos con paginación
         total_count = None
-        try:
-            ObjectId(id)  # Si es ObjectId, no contar
-        except (InvalidId, ValueError):
-            if skip_val == 0:
-                total_count = await collection.count_documents({"farmacia": id.strip(), "estado": {"$ne": "inactivo"}})
+        # try:
+        #     ObjectId(id)  # Si es ObjectId, no contar
+        # except (InvalidId, ValueError):
+        #     if skip_val == 0:
+        #         total_count = await collection.count_documents({"farmacia": id.strip(), "estado": {"$ne": "inactivo"}})
         
-        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (PAGINADO - con ID) - Total: {total_count}")
+        print(f"✅ [INVENTARIOS] Retornando {len(resultados)} items (PAGINADO - con ID) - Carga optimizada (sin conteo)")
         
         # IMPORTANTE: Retornar array directo para compatibilidad con frontend
         return resultados

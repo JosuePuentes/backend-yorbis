@@ -112,3 +112,4 @@ Si el error persiste, verificar:
 
 **Última actualización:** 2025-12-10
 
+

@@ -93,3 +93,4 @@ async def verify_connection_and_indexes():
 if __name__ == "__main__":
     asyncio.run(verify_connection_and_indexes())
 
+

@@ -134,3 +134,4 @@ Si tienes dudas o problemas, contacta al equipo de backend con:
 
 **Última actualización:** 2025-12-10
 
+

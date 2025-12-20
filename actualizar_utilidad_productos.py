@@ -103,3 +103,4 @@ async def actualizar_utilidad_productos():
 if __name__ == "__main__":
     asyncio.run(actualizar_utilidad_productos())
 
+

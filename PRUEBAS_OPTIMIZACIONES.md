@@ -217,3 +217,4 @@ Este script mostrará:
    - Los endpoints imprimen logs con prefijos `[PRODUCTOS]` y `[INVENTARIOS]`
    - Revisa los tiempos de respuesta en los logs
 
+

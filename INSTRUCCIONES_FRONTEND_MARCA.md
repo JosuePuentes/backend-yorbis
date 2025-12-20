@@ -176,3 +176,4 @@ El endpoint `/punto-venta/productos/buscar` ya estaba optimizado y ahora incluye
 
 **Última actualización:** 2025-12-10
 
+
